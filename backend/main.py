@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+
+from .config import DEFAULT_GUIDANCE, DEFAULT_STEPS, DEFAULT_STEPS_8, DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH, STORAGE_DIR
+from .jobs import JobStore
+from .tasks import TaskRunner, parse_colors_file
+from .workflow import DEFAULT_PROMPT_TEMPLATES, sanitize_prompt_template
+
+app = FastAPI(title='Flux2 Recolor Studio', version='0.3.0')
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+
+STORE = JobStore()
+RUNNER = TaskRunner(STORE)
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / 'frontend'
+if STATIC_DIR.exists():
+    app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
+
+
+@app.get('/', response_class=HTMLResponse)
+def index() -> str:
+    return (STATIC_DIR / 'index.html').read_text(encoding='utf-8')
+
+
+@app.get('/api/defaults')
+def defaults() -> dict:
+    return {
+        'workflow': 'image_flux2_working.json',
+        'guidance': DEFAULT_GUIDANCE,
+        'steps': DEFAULT_STEPS,
+        'steps_8': DEFAULT_STEPS_8,
+        'target_width': DEFAULT_TARGET_WIDTH,
+        'target_height': DEFAULT_TARGET_HEIGHT,
+        'enable_lora': False,
+        'enable_8_step_lora': False,
+        'default_prompt_templates': DEFAULT_PROMPT_TEMPLATES,
+    }
+
+
+@app.post('/api/parse-colors')
+async def parse_colors(colors_txt: UploadFile = File(...)) -> dict:
+    tmp_dir = STORAGE_DIR / 'temp'
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f'{int(time.time())}_{colors_txt.filename}'
+    tmp_path.write_bytes(await colors_txt.read())
+    garment_name, colors = parse_colors_file(tmp_path)
+    return {
+        'garment_name': garment_name,
+        'colors': [{'name': name, 'hex': hex_value} for name, hex_value in colors],
+    }
+
+
+@app.post('/api/jobs')
+async def create_job(
+    garment_name: str = Form(''),
+    colors_text: str = Form(...),
+    images: list[UploadFile] | None = File(None),
+    image: UploadFile | None = File(None),
+    prompt_template: str = Form(''),
+    guidance: float = Form(DEFAULT_GUIDANCE),
+    steps: int = Form(DEFAULT_STEPS),
+    steps_8: int = Form(DEFAULT_STEPS_8),
+    enable_lora: bool = Form(False),
+    enable_8_step_lora: bool = Form(False),
+    target_width: int = Form(DEFAULT_TARGET_WIDTH),
+    target_height: int = Form(DEFAULT_TARGET_HEIGHT),
+) -> dict:
+    upload_root = STORAGE_DIR / 'uploads'
+    upload_root.mkdir(parents=True, exist_ok=True)
+    job_image_dir = upload_root / f'job_{int(time.time())}'
+    job_image_dir.mkdir(parents=True, exist_ok=True)
+
+    incoming_images = list(images or [])
+    if image is not None and image.filename not in {img.filename for img in incoming_images}:
+        incoming_images.insert(0, image)
+    if not incoming_images:
+        raise HTTPException(status_code=400, detail='No image files provided')
+
+    saved_images = []
+    for idx, img in enumerate(incoming_images):
+        original_name = Path(img.filename).name if img.filename else f'image_{idx + 1}.png'
+        safe_name = original_name.replace('..', '_')
+        image_path = job_image_dir / safe_name
+        image_path.write_bytes(await img.read())
+        saved_images.append(image_path)
+
+    job_id = RUNNER.submit(
+        garment_name=garment_name,
+        colors_text=colors_text,
+        image_paths=saved_images,
+        prompt_template=sanitize_prompt_template(prompt_template),
+        guidance=guidance,
+        steps=steps,
+        steps_8=steps_8,
+        enable_lora=enable_lora,
+        enable_8_step_lora=enable_8_step_lora,
+        target_width=target_width,
+        target_height=target_height,
+    )
+    return {'job_id': job_id}
+
+
+@app.get('/api/jobs')
+def list_jobs() -> dict:
+    return {'jobs': [job.__dict__ for job in STORE.list()]}
+
+
+@app.get('/api/jobs/{job_id}')
+def get_job(job_id: str) -> dict:
+    job = STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='job not found')
+    return job.__dict__
+
+
+@app.get('/api/jobs/{job_id}/download')
+def download_job(job_id: str):
+    zip_path = RUNNER.zip_job_output(job_id)
+    return FileResponse(path=str(zip_path), filename=zip_path.name, media_type='application/zip')
+
+
+@app.get('/api/health')
+def health() -> dict:
+    return {'ok': True}

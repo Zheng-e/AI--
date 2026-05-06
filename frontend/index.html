@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flux2 改色工作台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">FX</div>
+        <div>
+          <h1>Flux2 改色工作台</h1>
+          <p>本地 ComfyUI · 浏览器提交任务</p>
+        </div>
+      </div>
+
+      <section class="card required-card">
+        <h3>必填项</h3>
+        <label>商品图文件夹</label>
+        <input id="imageFiles" type="file" accept="image/*" webkitdirectory directory multiple />
+        <label>颜色定义 TXT 文件</label>
+        <input id="colorsTxtFile" type="file" accept=".txt,text/plain" />
+      </section>
+
+      <section class="card required-card compact-actions">
+        <button id="submitBtn" type="button" class="full-width">开始改色</button>
+      </section>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">商品改色</p>
+          <h2>上传文件夹和颜色 TXT，提交任务并查看结果</h2>
+        </div>
+        <div class="status-pill">Local · ComfyUI</div>
+      </section>
+
+      <details class="panel collapsible">
+        <summary>
+          <div class="section-head summary-head">
+            <h2>可选参数</h2>
+            <span class="summary-tip">折叠</span>
+          </div>
+        </summary>
+        <div class="collapsible-body">
+          <div class="option-grid">
+            <div class="side-card">
+              <h3>商品名称</h3>
+              <input id="garmentName" placeholder="例如：长款背心系列-圆领无袖背心收褶皱" />
+            </div>
+            <div class="side-card">
+              <h3>生成参数</h3>
+              <div class="mini-grid">
+                <div><label>Guidance</label><input id="guidance" type="number" step="0.1" value="3.5" /></div>
+                <div><label>Steps</label><input id="steps" type="number" value="20" /></div>
+                <div><label>8-step Steps</label><input id="steps8" type="number" value="8" /></div>
+                <div><label>目标宽度</label><input id="targetWidth" type="number" value="1601" /></div>
+                <div><label>目标高度</label><input id="targetHeight" type="number" value="2086" /></div>
+              </div>
+            </div>
+          </div>
+          <div class="option-grid">
+            <div class="side-card">
+              <h3>手动颜色</h3>
+              <textarea id="manualColors" rows="7" placeholder="亮绿色: #ccd560&#10;粉色: #e271a5&#10;湖蓝色: #36acb6"></textarea>
+            </div>
+            <div class="side-card">
+              <h3>提示词模板</h3>
+              <textarea id="promptTemplate" rows="7" placeholder="留空则使用默认模板。可使用 {GARMENT} {GARMENT_CATEGORY} {RGB_VALUE} {HEX_VALUE}"></textarea>
+            </div>
+          </div>
+          <div class="side-card">
+            <h3>默认提示词模板</h3>
+            <div id="defaultPromptPreview" class="preview-box"></div>
+          </div>
+        </div>
+      </details>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>任务进度</h2>
+          <div class="section-actions"><button id="refreshBtn">刷新任务</button></div>
+        </div>
+        <div id="submitStatus" class="submit-status"></div>
+        <div id="jobsList" class="jobs-list"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

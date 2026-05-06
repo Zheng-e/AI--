@@ -1,0 +1,14 @@
+services:
+  recolor:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - COMFY_URL=http://host.docker.internal:8188
+    volumes:
+      - storage_data:/app/storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  storage_data:

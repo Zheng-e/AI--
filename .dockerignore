@@ -1,0 +1,10 @@
+storage/
+已改色/
+FS03920/
+__pycache__/
+*.pyc
+.git
+.gitignore
+*.bat
+CLAUDE.md
+.claude/

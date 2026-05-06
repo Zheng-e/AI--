@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 --version)",
+      "Bash(pip --version)",
+      "Bash(python3 -c ' *)",
+      "Bash(conda run *)",
+      "Bash(sleep 30 && cat /tmp/comfyui_startup.log 2>&1 | head -80)",
+      "Read(//tmp/**)",
+      "Read(//media/weilai/2FD6B4D0B2A57AD0/ComfyUI-aki-v1.6/ComfyUI/**)",
+      "Bash(/media/weilai/2FD6B4D0B2A57AD0/ComfyUI-aki-v1.6/ComfyUI/.conda/bin/python main.py --port 8188 --listen 127.0.0.1)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(kill 396301)",
+      "Bash(/media/weilai/2FD6B4D0B2A57AD0/ComfyUI-aki-v1.6/ComfyUI/.conda/bin/pip install *)",
+      "Bash(awk '{print $2, $9, $10, $11}')",
+      "Bash(kill 396757 396756)",
+      "Bash(/media/weilai/2FD6B4D0B2A57AD0/ComfyUI-aki-v1.6/ComfyUI/.conda/bin/python main.py --port 8188 --listen 127.0.0.1 --disable-all-custom-nodes)",
+      "Bash(curl -s --max-time 10 -o /dev/null -w \"%{http_code}\" https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/extension-node-map.json)",
+      "Bash(pkill -f \"main.py --port 8188\")",
+      "Bash(TaskStop boic7e316 *)",
+      "Bash(git clone *)",
+      "Bash(export http_proxy=http://127.0.0.1:33331)",
+      "Bash(export https_proxy=http://127.0.0.1:33331)",
+      "Bash(curl -s --max-time 10 -o /dev/null -w \"HTTP状态: %{http_code}, 耗时: %{time_total}s\\\\n\" https://www.google.com)",
+      "Bash(# 检查 verge-mihomo 的端口（这才是实际的代理端口） *)",
+      "Read(//home/weilai/.local/share/io.github.clash-verge-rev.clash-verge-rev/**)",
+      "Bash(export http_proxy=http://127.0.0.1:7897)",
+      "Bash(export https_proxy=http://127.0.0.1:7897)",
+      "Bash(export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897)",
+      "Bash(rm -rf /media/weilai/2FD6B4D0B2A57AD0/ComfyUI && export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897 && git clone https://github.com/comfyanonymous/ComfyUI.git /media/weilai/2FD6B4D0B2A57AD0/ComfyUI 2>&1 | tail -10)",
+      "Bash(conda create *)",
+      "Bash(/media/weilai/2FD6B4D0B2A57AD0/ComfyUI/.conda/bin/pip install *)",
+      "Bash(ls /media/weilai/2FD6B4D0B2A57AD0/ComfyUI-aki-v1.6/models/)",
+      "Read(//media/weilai/2FD6B4D0B2A57AD0/ComfyUI-aki-v1.6/models/**)",
+      "Bash(pip install *)",
+      "Bash(python -c \"from backend.main import app; print\\('AI改色后端导入成功'\\)\")",
+      "Bash(python app.py)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ],
+    "additionalDirectories": [
+      "/media/weilai/2FD6B4D0B2A57AD0/ComfyUI"
+    ]
+  }
+}

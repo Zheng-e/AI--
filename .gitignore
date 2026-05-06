@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 运行时数据
+storage/uploads/
+storage/outputs/
+storage/temp/
+
+# 已改色输出（大量图片，不应入库）
+已改色/
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Windows 启动脚本（Linux 环境不需要）
+run_server.bat
+
+# 环境
+.venv/
+.conda/
+.env

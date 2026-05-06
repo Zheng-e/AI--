@@ -82,7 +82,7 @@ class TaskRunner:
             message='queued',
             garment_name=garment_name,
             input_name=first_image.name,
-            output_dir=str(self.default_output_dir / job_id_safe(first_image.stem)),
+            output_dir=str(self.default_output_dir / job.job_id),
             created_at=time.time(),
             updated_at=time.time(),
         )
@@ -211,10 +211,14 @@ class TaskRunner:
         return workflow
 
     def _parse_colors_text(self, colors_text: str) -> Tuple[str, List[Tuple[str, str]]]:
-        tmp = STORAGE_DIR / 'temp_colors.txt'
-        tmp.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(colors_text, encoding='utf-8')
-        return parse_colors_file(tmp)
+        tmp_dir = STORAGE_DIR / 'temp'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp = tmp_dir / f'temp_colors_{threading.current_thread().ident}_{int(time.time() * 1000)}.txt'
+        try:
+            tmp.write_text(colors_text, encoding='utf-8')
+            return parse_colors_file(tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _fallback_collect_outputs(self, output_root: Path, image_stem: str, color_name: str, hex_value: str) -> List[Path]:
         candidates = self.client.collect_output_paths(output_root)

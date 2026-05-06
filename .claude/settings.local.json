@@ -36,7 +36,9 @@
       "Bash(python -c \"from backend.main import app; print\\('AI改色后端导入成功'\\)\")",
       "Bash(python app.py)",
       "Bash(git init *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git config *)"
     ],
     "additionalDirectories": [
       "/media/weilai/2FD6B4D0B2A57AD0/ComfyUI"

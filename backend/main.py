@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -17,7 +18,7 @@ app = FastAPI(title='Flux2 Recolor Studio', version='0.3.0')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=['*'],
     allow_headers=['*'],
 )
@@ -92,7 +93,7 @@ async def create_job(
     saved_images = []
     for idx, img in enumerate(incoming_images):
         original_name = Path(img.filename).name if img.filename else f'image_{idx + 1}.png'
-        safe_name = original_name.replace('..', '_')
+        safe_name = re.sub(r'[^\w.\-]', '_', original_name)[:200]
         image_path = job_image_dir / safe_name
         image_path.write_bytes(await img.read())
         saved_images.append(image_path)

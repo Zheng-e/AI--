@@ -11,8 +11,8 @@ from urllib.parse import urljoin
 import requests
 
 
-WORKFLOW_PATH = Path(__file__).with_name("image_flux2 (1).json")
-DEFAULT_COLORS_TXT = Path(__file__).with_name("FS03856.txt")
+WORKFLOW_PATH = Path(__file__).with_name("image_flux2_working.json")
+DEFAULT_COLORS_TXT = Path(__file__).resolve().parent / "FS03920" / "FS03920.txt"
 DEFAULT_INPUT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent.parent / "改色结果"
 TARGET_OUTPUT_WIDTH = 1601

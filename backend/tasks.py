@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from pathlib import Path
@@ -18,8 +19,7 @@ from .jobs import JobStore
 from .workflow import build_prompt, load_workflow, sanitize_prompt_template
 
 
-def parse_colors_file(path: Path) -> Tuple[str, List[Tuple[str, str]]]:
-    text = path.read_text(encoding='utf-8-sig')
+def _parse_colors_text(text: str, source: str = '') -> Tuple[str, List[Tuple[str, str]]]:
     garment_name = 'garment'
     colors: List[Tuple[str, str]] = []
     in_colors = False
@@ -43,8 +43,18 @@ def parse_colors_file(path: Path) -> Tuple[str, List[Tuple[str, str]]]:
             if len(hex_value) == 6:
                 colors.append((name.strip(), f'#{hex_value.lower()}'))
     if not colors:
-        raise ValueError(f'No colors found in {path}')
+        raise ValueError(f'No colors found in {source or "input"}')
     return garment_name, colors
+
+
+def parse_colors_file_bytes(data: bytes) -> Tuple[str, List[Tuple[str, str]]]:
+    text = data.decode('utf-8-sig')
+    return _parse_colors_text(text)
+
+
+def parse_colors_file(path: Path) -> Tuple[str, List[Tuple[str, str]]]:
+    text = path.read_text(encoding='utf-8-sig')
+    return _parse_colors_text(text, source=str(path))
 
 
 def hex_to_rgb(hex_value: str) -> Tuple[int, int, int]:
@@ -192,7 +202,7 @@ class TaskRunner:
         garment_name: str,
         job_id: str,
     ) -> Dict:
-        workflow = load_workflow(self.workflow_path)
+        workflow = copy.deepcopy(base_workflow)
         workflow['46']['inputs']['image'] = image_filename
         workflow['68:6']['inputs']['text'] = prompt
         workflow['68:26']['inputs']['guidance'] = guidance

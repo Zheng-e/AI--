@@ -1,14 +1,13 @@
 import argparse
-import json
+import copy
 import random
 import re
-import time
-from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urljoin
 
-import requests
+from backend.comfy_client import ComfyClient
+from backend.tasks import hex_to_rgb, parse_colors_file
+from backend.workflow import build_prompt, infer_category, load_workflow
 
 
 WORKFLOW_PATH = Path(__file__).with_name("image_flux2_working.json")
@@ -17,46 +16,7 @@ DEFAULT_INPUT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent.parent / "改色结果"
 TARGET_OUTPUT_WIDTH = 1601
 TARGET_OUTPUT_HEIGHT = 2086
-TARGET_OUTPUT_MEGAPIXELS = (TARGET_OUTPUT_WIDTH * TARGET_OUTPUT_HEIGHT) / 1_000_000
 INPUT_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-
-
-PROMPT_TEMPLATES = {
-    "top": (
-        "Recolor all visible {GARMENT_CATEGORY} items in the image for the {GARMENT}. Keep the original model, face, skin, hair, pose, expression, body shape, camera angle, framing, background, environment, lighting direction, lighting intensity, exposure, white balance, global color grading, contrast, saturation, shadows, highlights, reflections, and all non-garment pixels exactly unchanged.\n\n"
-        "Change all visible {GARMENT_CATEGORY} items to the exact target color {RGB_VALUE} and exact HEX value {HEX_VALUE}. If multiple {GARMENT_CATEGORY} pieces are visible, recolor every one of them. Do not leave any matching garment piece unmodified. Do not modify pants, shorts, skirt, shoes, accessories, or any other non-target item.\n\n"
-        "Preserve the original garment structure exactly. Keep the neckline, collar, seams, stitching, hems, cuffs, folds, wrinkles, fabric weave, edge shapes, and silhouette unchanged. Do not add, remove, or redesign any construction details. Do not invent new stitching, do not create extra lines, and do not redraw the garment.\n\n"
-        "Match the garment color faithfully to the target RGB value. Do not make it brighter, cleaner, more vivid, more saturated, neon, glossy, or more colorful than the target color. Preserve realistic textile behavior, natural shading, subtle highlights, and material depth without altering the rest of the scene.\n\n"
-        "The result must look like a minimal, physically plausible recolor edit on an authentic product photograph, not a repaint or redesign.\n\n"
-        "Negative prompt:\n"
-        "Do not change the background saturation, contrast, color grading, or white balance. Do not modify pants, shorts, skirt, shoes, accessories, or any non-target clothing. Do not alter seams, stitching, collars, hems, neckline structure, or silhouette. Do not invent new garment details. Do not oversaturate the garment. Do not make the clothing brighter, cleaner, more vivid, more saturated, glossy, or enhanced beyond the target RGB. Do not repaint the whole image. Do not change any non-garment pixels. Do not create AI artifacts, plastic textures, or unnatural redraws."
-    ),
-    "bottom": (
-        "Recolor all visible {GARMENT_CATEGORY} items in the image for the {GARMENT}. Keep the original model, face, skin, hair, pose, expression, body shape, camera angle, framing, background, environment, lighting direction, lighting intensity, exposure, white balance, global color grading, contrast, saturation, shadows, highlights, reflections, and all non-garment pixels exactly unchanged.\n\n"
-        "Change all visible {GARMENT_CATEGORY} items to the exact target color {RGB_VALUE} and exact HEX value {HEX_VALUE}. If multiple {GARMENT_CATEGORY} pieces are visible, recolor every one of them. Do not leave any matching garment piece unmodified. Do not modify tops, shirts, jackets, shoes, accessories, or any other non-target item.\n\n"
-        "Preserve the original garment structure exactly. Keep the waistband, fly, seams, stitching, hems, pleats, folds, wrinkles, pocket shapes, fabric weave, edge shapes, and silhouette unchanged. Do not add, remove, or redesign any construction details. Do not invent new stitching, do not create extra lines, and do not redraw the garment.\n\n"
-        "Match the garment color faithfully to the target RGB value. Do not make it brighter, cleaner, more vivid, more saturated, neon, glossy, or more colorful than the target color. Preserve realistic textile behavior, natural shading, subtle highlights, and material depth without altering the rest of the scene.\n\n"
-        "The result must look like a minimal, physically plausible recolor edit on an authentic product photograph, not a repaint or redesign.\n\n"
-        "Negative prompt:\n"
-        "Do not change the background saturation, contrast, color grading, or white balance. Do not modify tops, shirts, jackets, shoes, accessories, or any non-target clothing. Do not alter seams, stitching, waistline structure, hems, or silhouette. Do not invent new garment details. Do not oversaturate the garment. Do not make the clothing brighter, cleaner, more vivid, more saturated, glossy, or enhanced beyond the target RGB. Do not repaint the whole image. Do not change any non-garment pixels. Do not create AI artifacts, plastic textures, or unnatural redraws."
-    ),
-    "dress": (
-        "Recolor all visible dress items in the image for the {GARMENT}. Keep the original model, face, skin, hair, pose, expression, body shape, camera angle, framing, background, environment, lighting direction, lighting intensity, exposure, white balance, global color grading, contrast, saturation, shadows, highlights, reflections, and all non-garment pixels exactly unchanged.\n\n"
-        "Change all visible dresses to the exact target color {RGB_VALUE} and exact HEX value {HEX_VALUE}. If multiple dress parts or layered dress pieces are visible, recolor every one of them. Do not leave any matching dress piece unmodified. Do not modify shoes, accessories, or any other non-target item.\n\n"
-        "Preserve the original garment structure exactly. Keep the neckline, straps, seams, stitching, hems, folds, wrinkles, fabric weave, edge shapes, fringe, sequins, and silhouette unchanged. Do not add, remove, or redesign any construction details. Do not invent new stitching, do not create extra lines, and do not redraw the garment.\n\n"
-        "Match the garment color faithfully to the target RGB value. Do not make it brighter, cleaner, more vivid, more saturated, neon, glossy, or more colorful than the target color. Preserve realistic textile behavior, natural shading, subtle highlights, and material depth without altering the rest of the scene.\n\n"
-        "The result must look like a minimal, physically plausible recolor edit on an authentic product photograph, not a repaint or redesign.\n\n"
-        "Negative prompt:\n"
-        "Do not change the background saturation, contrast, color grading, or white balance. Do not modify shoes or accessories. Do not alter seams, stitching, neckline structure, hems, straps, fringe, sequins, or silhouette. Do not invent new garment details. Do not oversaturate the garment. Do not make the clothing brighter, cleaner, more vivid, more saturated, glossy, or enhanced beyond the target RGB. Do not repaint the whole image. Do not change any non-garment pixels. Do not create AI artifacts, plastic textures, or unnatural redraws."
-    ),
-}
-
-
-CATEGORY_KEYWORDS = [
-    ("bottom", ["裤", "短裤", "长裤", "牛仔裤", "半身裙", "裙"]),
-    ("dress", ["裙", "dress"]),
-    ("top", ["上衣", "t恤", "T恤", "POLO", "背心", "吊带", "文胸", "衬衫", "卫衣", "夹克", "外套"]),
-]
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,8 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=20, help="Steps when 8-step LoRA mode is off")
     parser.add_argument("--steps-8", type=int, default=8, help="Steps when 8-step LoRA mode is on")
     parser.add_argument("--guidance", type=float, default=3.5, help="Flux guidance value")
-    parser.add_argument("--target-width", type=int, default=TARGET_OUTPUT_WIDTH, help="Target output width for the working resolution")
-    parser.add_argument("--target-height", type=int, default=TARGET_OUTPUT_HEIGHT, help="Target output height for the working resolution")
+    parser.add_argument("--target-width", type=int, default=TARGET_OUTPUT_WIDTH, help="Target output width")
+    parser.add_argument("--target-height", type=int, default=TARGET_OUTPUT_HEIGHT, help="Target output height")
     parser.add_argument("--wait", type=float, default=2.0, help="Seconds to wait between queue polls")
     return parser.parse_args()
 
@@ -84,70 +44,6 @@ def sanitize_name(name: str) -> str:
     name = re.sub(r"[\\/:*?\"<>|]+", "_", name)
     name = re.sub(r"\s+", "_", name.strip())
     return name[:120] or "unnamed"
-
-
-def parse_colors_file(path: Path) -> Tuple[str, List[Tuple[str, str]]]:
-    text = path.read_text(encoding="utf-8-sig")
-    garment_name = "garment"
-    colors: List[Tuple[str, str]] = []
-    in_colors = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith("GARMENT"):
-            garment_name = line.split(":", 1)[1].strip() if ":" in line else garment_name
-            in_colors = False
-            continue
-        if line.startswith("COLORS"):
-            in_colors = True
-            continue
-        if not in_colors:
-            continue
-        m = re.match(r"(.+?)\s*[：:]\s*#?([0-9a-fA-F]{6})", line)
-        if m:
-            colors.append((m.group(1).strip(), f"#{m.group(2).lower()}"))
-    if not colors:
-        raise ValueError(f"No colors found in {path}")
-    return garment_name, colors
-
-
-def hex_to_rgb(hex_value: str) -> Tuple[int, int, int]:
-    h = hex_value.lstrip("#")
-    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
-
-
-def load_workflow(path: Path) -> Dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def set_nested_input(workflow: Dict, node_id: str, key: str, value) -> None:
-    workflow[node_id]["inputs"][key] = value
-
-
-def infer_category(garment_name: str) -> str:
-    for category, keywords in CATEGORY_KEYWORDS:
-        if any(keyword.lower() in garment_name.lower() for keyword in keywords):
-            return category
-    return "top"
-
-
-def build_prompt(rgb: Tuple[int, int, int], hex_value: str, garment_name: str, template: Optional[str]) -> str:
-    rgb_text = f"RGB({rgb[0]}, {rgb[1]}, {rgb[2]})"
-    category = infer_category(garment_name)
-    if template:
-        return template.format(
-            RGB_VALUE=rgb_text,
-            HEX_VALUE=hex_value,
-            GARMENT=garment_name,
-            GARMENT_CATEGORY=category,
-        )
-    return PROMPT_TEMPLATES.get(category, PROMPT_TEMPLATES["top"]).format(
-        RGB_VALUE=rgb_text,
-        HEX_VALUE=hex_value,
-        GARMENT=garment_name,
-        GARMENT_CATEGORY=category,
-    )
 
 
 def prepare_workflow(
@@ -164,89 +60,28 @@ def prepare_workflow(
     target_width: int,
     target_height: int,
 ) -> Dict:
-    workflow = json.loads(json.dumps(base_workflow))
-    set_nested_input(workflow, "46", "image", image_filename)
-    set_nested_input(workflow, "68:6", "text", prompt)
-    set_nested_input(workflow, "68:25", "noise_seed", seed)
-    set_nested_input(workflow, "68:94", "value", enable_8_step_lora)
-    set_nested_input(workflow, "68:92", "switch", enable_lora)
-    set_nested_input(workflow, "68:93", "switch", enable_8_step_lora)
-    set_nested_input(workflow, "68:26", "guidance", guidance)
-    set_nested_input(workflow, "68:90", "value", steps_8)
-    set_nested_input(workflow, "68:91", "value", steps)
-    set_nested_input(workflow, "45", "megapixels", (target_width * target_height) / 1_000_000)
-    set_nested_input(workflow, "68:47", "width", target_width)
-    set_nested_input(workflow, "68:47", "height", target_height)
-    set_nested_input(workflow, "68:72", "image", ["45", 0])
-    set_nested_input(workflow, "68:48", "width", ["68:72", 0])
-    set_nested_input(workflow, "68:48", "height", ["68:72", 1])
-    set_nested_input(workflow, "9", "filename_prefix", f"batch_flux2_{sanitize_name(garment_name)}")
+    workflow = copy.deepcopy(base_workflow)
+    workflow["46"]["inputs"]["image"] = image_filename
+    workflow["68:6"]["inputs"]["text"] = prompt
+    workflow["68:25"]["inputs"]["noise_seed"] = seed
+    workflow["68:94"]["inputs"]["value"] = enable_8_step_lora
+    workflow["68:92"]["inputs"]["switch"] = enable_lora
+    workflow["68:93"]["inputs"]["switch"] = enable_8_step_lora
+    workflow["68:26"]["inputs"]["guidance"] = guidance
+    workflow["68:90"]["inputs"]["value"] = steps_8
+    workflow["68:91"]["inputs"]["value"] = steps
+    workflow["45"]["inputs"]["megapixels"] = (target_width * target_height) / 1_000_000
+    workflow["68:47"]["inputs"]["width"] = target_width
+    workflow["68:47"]["inputs"]["height"] = target_height
+    workflow["68:72"]["inputs"]["image"] = ["45", 0]
+    workflow["68:48"]["inputs"]["width"] = ["68:72", 0]
+    workflow["68:48"]["inputs"]["height"] = ["68:72", 1]
+    workflow["9"]["inputs"]["filename_prefix"] = f"batch_flux2_{sanitize_name(garment_name)}"
     return workflow
 
 
-def upload_image(comfy_url: str, image_path: Path) -> str:
-    with image_path.open("rb") as f:
-        files = {"image": (image_path.name, f, "image/jpeg")}
-        data = {"type": "input"}
-        resp = requests.post(urljoin(comfy_url, "/upload/image"), files=files, data=data, timeout=120)
-    resp.raise_for_status()
-    payload = resp.json()
-    if "name" not in payload:
-        raise RuntimeError(f"Unexpected upload response: {payload}")
-    return payload["name"]
-
-
-def queue_prompt(comfy_url: str, workflow: Dict) -> str:
-    resp = requests.post(urljoin(comfy_url, "/prompt"), json={"prompt": workflow}, timeout=120)
-    resp.raise_for_status()
-    payload = resp.json()
-    prompt_id = payload.get("prompt_id") or payload.get("id")
-    if not prompt_id:
-        raise RuntimeError(f"Unexpected queue response: {payload}")
-    return prompt_id
-
-
-def get_history(comfy_url: str, prompt_id: str) -> Dict:
-    resp = requests.get(urljoin(comfy_url, f"/history/{prompt_id}"), timeout=120)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def wait_for_completion(comfy_url: str, prompt_id: str, wait_seconds: float) -> Dict:
-    while True:
-        history = get_history(comfy_url, prompt_id)
-        if prompt_id in history:
-            return history[prompt_id]
-        time.sleep(wait_seconds)
-
-
-def extract_output_images(history_entry: Dict) -> List[Dict]:
-    outputs = history_entry.get("outputs", {})
-    images: List[Dict] = []
-    for node_output in outputs.values():
-        for img in node_output.get("images", []):
-            images.append(img)
-    return images
-
-
-def save_output_image(comfy_url: str, image_info: Dict, output_dir: Path, prefix: str) -> Path:
-    params = {
-        "filename": image_info["filename"],
-        "subfolder": image_info.get("subfolder", ""),
-        "type": image_info.get("type", "output"),
-    }
-    resp = requests.get(urljoin(comfy_url, "/view"), params=params, timeout=120)
-    resp.raise_for_status()
-    suffix = Path(image_info["filename"]).suffix or ".png"
-    safe_name = sanitize_name(prefix)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{safe_name}{suffix}"
-    output_path.write_bytes(resp.content)
-    return output_path
-
-
 def list_images(input_dir: Path) -> List[Path]:
-    return sorted([p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in INPUT_IMAGE_EXTS])
+    return sorted(p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in INPUT_IMAGE_EXTS)
 
 
 def parse_product_folder(product_dir: Path, default_colors_txt: Optional[Path]) -> Tuple[str, List[Tuple[str, str]]]:
@@ -272,7 +107,7 @@ def find_product_dirs(base_dir: Path) -> List[Path]:
             continue
         if entry.name.startswith("."):
             continue
-        if entry.name in {"改色结果", "__pycache__", ".venv"}:
+        if entry.name in {"改色结果", "__pycache__", ".venv", "storage", "已改色"}:
             continue
         if list_images(entry) or any(p.suffix.lower() == ".txt" for p in entry.iterdir() if p.is_file()):
             dirs.append(entry)
@@ -282,7 +117,7 @@ def find_product_dirs(base_dir: Path) -> List[Path]:
 def process_product_folder(
     product_dir: Path,
     base_workflow: Dict,
-    comfy_url: str,
+    client: ComfyClient,
     output_root: Path,
     prompt_template: Optional[str],
     seed: int,
@@ -309,15 +144,15 @@ def process_product_folder(
     print(f"Images: {len(images)} | Colors: {len(colors)}")
     print(f"{'=' * 60}")
 
-    summary = {"ok": 0, "skipped": 0, "failed": []}
+    summary: Dict[str, object] = {"ok": 0, "skipped": 0, "failed": []}
     for image_path in images:
         print(f"Uploading {image_path.name}...")
-        comfy_image_name = upload_image(comfy_url, image_path)
+        comfy_image_name = client.upload_image(image_path)
 
         for color_name, hex_value in colors:
             rgb = hex_to_rgb(hex_value)
             job_seed = seed if seed != 0 else random.randint(1, 2_000_000_000)
-            prompt = build_prompt(rgb, hex_value, garment_name, prompt_template)
+            prompt = build_prompt(garment_name, hex_value, rgb, template=prompt_template)
             if print_prompts:
                 print("\n===== PROMPT PREVIEW START =====")
                 print(f"PRODUCT: {product_dir.name}")
@@ -342,18 +177,27 @@ def process_product_folder(
             )
 
             print(f"Queueing {product_dir.name}/{image_path.name} -> {color_name} ({hex_value})...")
-            prompt_id = queue_prompt(comfy_url, workflow)
-            history_entry = wait_for_completion(comfy_url, prompt_id, 2.0)
-            output_images = extract_output_images(history_entry)
+            prompt_id = client.queue_prompt(workflow)
+            history_entry = client.wait_for_completion(prompt_id, wait_seconds=2.0, timeout=1200.0)
+            output_images = ComfyClient.extract_output_images(history_entry)
             if not output_images:
                 print(f"No output images found for {image_path.name} / {color_name}")
                 summary["failed"].append((product_dir.name, image_path.name, hex_value, "no-output"))
                 continue
 
-            for idx, img in enumerate(output_images, start=1):
+            for idx, img_info in enumerate(output_images, start=1):
+                bytes_data = client.view_image(
+                    img_info["filename"],
+                    img_info.get("subfolder", ""),
+                    img_info.get("type", "output"),
+                )
                 prefix = f"{image_path.stem}_{sanitize_name(color_name)}_{hex_value}_{idx}"
-                saved = save_output_image(comfy_url, img, output_dir, prefix)
-                print(f"Saved: {saved}")
+                safe_name = sanitize_name(prefix)
+                suffix = Path(img_info["filename"]).suffix or ".png"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = output_dir / f"{safe_name}{suffix}"
+                output_path.write_bytes(bytes_data)
+                print(f"Saved: {output_path}")
                 summary["ok"] += 1
     return summary
 
@@ -376,6 +220,8 @@ def main() -> None:
     if not product_dirs:
         raise ValueError(f"No product folders found in {input_root}")
 
+    client = ComfyClient(comfy_url)
+
     print(f"Found {len(product_dirs)} product folder(s): {[d.name for d in product_dirs]}")
     print(f"Output root: {output_root}")
     print(f"Default guidance: {args.guidance}")
@@ -389,7 +235,7 @@ def main() -> None:
             summary = process_product_folder(
                 product_dir=product_dir,
                 base_workflow=base_workflow,
-                comfy_url=comfy_url,
+                client=client,
                 output_root=output_root,
                 prompt_template=args.prompt_template,
                 seed=args.seed,

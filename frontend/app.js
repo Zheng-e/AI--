@@ -128,7 +128,10 @@ async function loadDefaults() {
 }
 
 async function submitJob() {
+  const btn = document.getElementById('submitBtn');
   const status = document.getElementById('submitStatus');
+  btn.disabled = true;
+  btn.textContent = '提交中...';
   try {
     status.textContent = '提交中...';
     const files = Array.from(document.getElementById('imageFiles').files || []);
@@ -138,6 +141,11 @@ async function submitJob() {
     const colorsTxt = document.getElementById('colorsTxtFile').files[0];
     if (!colorsTxt) throw new Error('请上传颜色定义 TXT 文件');
     const manualColors = parseManualColors(document.getElementById('manualColors').value);
+    let colorsText = await colorsTxt.text();
+    if (manualColors.length) {
+      const manualBlock = 'COLORS\n' + manualColors.map(c => `${c.name}: ${c.hex}`).join('\n');
+      colorsText = colorsText.trimEnd() + '\n' + manualBlock;
+    }
     const form = new FormData();
     form.append('garment_name', document.getElementById('garmentName').value || '');
     form.append('prompt_template', document.getElementById('promptTemplate').value || '');
@@ -150,14 +158,16 @@ async function submitJob() {
     form.append('enable_8_step_lora', false);
     if (images.length > 0) form.append('image', images[0]);
     images.forEach(file => form.append('images', file));
-    form.append('colors_text', await colorsTxt.text());
-    if (manualColors.length) form.append('manual_colors', JSON.stringify(manualColors));
+    form.append('colors_text', colorsText);
     const result = await api('/api/jobs', { method: 'POST', body: form });
     status.textContent = `已提交任务 ${result.job_id}`;
     await refreshJobs();
   } catch (err) {
     status.textContent = '提交失败';
     alert(err.message || '提交失败');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '开始改色';
   }
 }
 

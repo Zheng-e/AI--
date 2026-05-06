@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import DEFAULT_GUIDANCE, DEFAULT_STEPS, DEFAULT_STEPS_8, DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH, STORAGE_DIR
 from .jobs import JobStore
-from .tasks import TaskRunner, parse_colors_file
+from .tasks import TaskRunner, parse_colors_file_bytes
 from .workflow import DEFAULT_PROMPT_TEMPLATES, sanitize_prompt_template
 
 app = FastAPI(title='Flux2 Recolor Studio', version='0.3.0')
@@ -52,12 +52,9 @@ def defaults() -> dict:
 
 
 @app.post('/api/parse-colors')
-async def parse_colors(colors_txt: UploadFile = File(...)) -> dict:
-    tmp_dir = STORAGE_DIR / 'temp'
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = tmp_dir / f'{int(time.time())}_{colors_txt.filename}'
-    tmp_path.write_bytes(await colors_txt.read())
-    garment_name, colors = parse_colors_file(tmp_path)
+def parse_colors(colors_txt: UploadFile = File(...)) -> dict:
+    data = colors_txt.file.read()
+    garment_name, colors = parse_colors_file_bytes(data)
     return {
         'garment_name': garment_name,
         'colors': [{'name': name, 'hex': hex_value} for name, hex_value in colors],
@@ -65,7 +62,7 @@ async def parse_colors(colors_txt: UploadFile = File(...)) -> dict:
 
 
 @app.post('/api/jobs')
-async def create_job(
+def create_job(
     garment_name: str = Form(''),
     colors_text: str = Form(...),
     images: list[UploadFile] | None = File(None),
@@ -95,7 +92,7 @@ async def create_job(
         original_name = Path(img.filename).name if img.filename else f'image_{idx + 1}.png'
         safe_name = re.sub(r'[^\w.\-]', '_', original_name)[:200]
         image_path = job_image_dir / safe_name
-        image_path.write_bytes(await img.read())
+        image_path.write_bytes(img.file.read())
         saved_images.append(image_path)
 
     job_id = RUNNER.submit(

@@ -8,6 +8,7 @@ let statusChart = null;
 let engineChart = null;
 let dailyChart = null;
 let allJobs = [];
+let prevStatsJson = '';
 
 async function fetchFromServer(baseUrl, url) {
   const resp = await fetch(baseUrl + url);
@@ -15,15 +16,14 @@ async function fetchFromServer(baseUrl, url) {
   return resp.json();
 }
 
-async function fetchStats() {
+async function fetchStatsRaw() {
   if (!currentServerUrl) {
     const results = await Promise.allSettled(
       SERVERS.map(s => fetchFromServer(s.url, '/api/stats').then(data => ({ ...data, _server: s.name })))
     );
-    const all = results.filter(r => r.status === 'fulfilled').map(r => r.value);
-    return mergeStats(all);
+    return results.filter(r => r.status === 'fulfilled').map(r => r.value);
   }
-  return fetchFromServer(currentServerUrl, '/api/stats');
+  return [await fetchFromServer(currentServerUrl, '/api/stats')];
 }
 
 async function fetchJobs() {
@@ -44,7 +44,7 @@ async function fetchJobs() {
   return (data.jobs || []).map(j => ({ ...j, _serverUrl: currentServerUrl }));
 }
 
-function mergeStats(all) {
+function mergeStats(all, jobs) {
   const merged = {
     total_jobs: 0, products: 0, total_combos: 0, completed_combos: 0,
     completion_rate: 0, avg_duration_seconds: 0,
@@ -64,7 +64,12 @@ function mergeStats(all) {
       durationCount += s.by_status?.completed || 0;
     }
   }
-  merged.products = all.reduce((sum, s) => sum + (s.products || 0), 0);
+  // Count unique product_ids from jobs list to avoid cross-server duplicates
+  const uniqueProducts = new Set();
+  for (const j of (jobs || [])) {
+    if (j.product_id) uniqueProducts.add(j.product_id);
+  }
+  merged.products = uniqueProducts.size;
   merged.completion_rate = merged.total_combos > 0 ? merged.completed_combos / merged.total_combos : 0;
   merged.avg_duration_seconds = durationCount > 0 ? durationSum / durationCount : 0;
   return merged;
@@ -98,6 +103,7 @@ function renderStatsCards(stats) {
   document.getElementById('statCompleted').textContent = stats.by_status?.completed || 0;
   document.getElementById('statActive').textContent = (stats.by_status?.running || 0) + (stats.by_status?.queued || 0);
   document.getElementById('statFailed').textContent = (stats.by_status?.failed || 0) + (stats.by_status?.paused || 0);
+  document.getElementById('statCancelled').textContent = (stats.by_status?.cancelled || 0) + (stats.by_status?.cancelling || 0);
   document.getElementById('statCombos').textContent = `${stats.completed_combos || 0}/${stats.total_combos || 0}`;
   document.getElementById('statRate').textContent = `${((stats.completion_rate || 0) * 100).toFixed(1)}%`;
 }
@@ -122,13 +128,9 @@ function renderStatusChart(stats) {
 
 function renderEngineChart(stats) {
   const ctx = document.getElementById('engineChart').getContext('2d');
-  const labels = [], data = [], colors = ['#2563eb', '#0ea5e9', '#8b5cf6', '#ec4899'];
+  const labels = [], data = [], colors = ['#2563eb', '#0ea5e9'];
   for (const [k, v] of Object.entries(stats.by_engine || {})) {
     labels.push(ENGINE_LABELS[k] || k);
-    data.push(v);
-  }
-  for (const [k, v] of Object.entries(stats.by_model || {})) {
-    labels.push(k);
     data.push(v);
   }
   if (engineChart) engineChart.destroy();
@@ -188,12 +190,18 @@ function escapeHtml(text) {
 
 async function refresh() {
   try {
-    const [stats, jobs] = await Promise.all([fetchStats(), fetchJobs()]);
+    const [allStats, jobs] = await Promise.all([fetchStatsRaw(), fetchJobs()]);
     allJobs = jobs;
+    const stats = mergeStats(allStats, jobs);
     renderStatsCards(stats);
-    renderStatusChart(stats);
-    renderEngineChart(stats);
-    renderDailyChart(stats);
+    // Only re-render charts if data actually changed
+    const statsJson = JSON.stringify({ by_status: stats.by_status, by_engine: stats.by_engine, daily: stats.daily_submissions });
+    if (statsJson !== prevStatsJson) {
+      prevStatsJson = statsJson;
+      renderStatusChart(stats);
+      renderEngineChart(stats);
+      renderDailyChart(stats);
+    }
     renderTable(jobs);
   } catch (e) {
     console.error('Dashboard refresh error:', e);

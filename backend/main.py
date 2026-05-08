@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEFAULT_GUIDANCE, DEFAULT_STEPS, DEFAULT_STEPS_8, DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH, SERVER_ID, SERVER_NAME, STORAGE_DIR
+from .config import DEFAULT_API_MODEL, DEFAULT_GUIDANCE, DEFAULT_STEPS, DEFAULT_STEPS_8, DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH, SERVER_ID, SERVER_NAME, STORAGE_DIR
 from .jobs import JobStore
 from .tasks import TaskRunner, parse_colors_file_bytes
 from .workflow import DEFAULT_PROMPT_TEMPLATES, sanitize_prompt_template
@@ -82,6 +82,8 @@ def create_job(
     enable_8_step_lora: bool = Form(False),
     target_width: int = Form(DEFAULT_TARGET_WIDTH),
     target_height: int = Form(DEFAULT_TARGET_HEIGHT),
+    engine: str = Form('comfyui'),
+    api_model: str = Form(''),
 ) -> dict:
     upload_root = STORAGE_DIR / 'uploads'
     upload_root.mkdir(parents=True, exist_ok=True)
@@ -116,6 +118,8 @@ def create_job(
         enable_8_step_lora=enable_8_step_lora,
         target_width=target_width,
         target_height=target_height,
+        engine=engine,
+        api_model=api_model,
     )
     return {'job_id': job_id}
 
@@ -201,6 +205,15 @@ def batch_delete_jobs(body: dict) -> dict:
 def download_job(job_id: str):
     zip_path = RUNNER.zip_job_output(job_id)
     return FileResponse(path=str(zip_path), filename=zip_path.name, media_type='application/zip')
+
+
+@app.get('/api/models')
+def list_models() -> dict:
+    return {'models': [
+        {'id': 'gpt-image-2-client', 'label': 'GPT Image 2 Client (最便宜)', 'priority': 1},
+        {'id': 'gpt-image-2', 'label': 'GPT Image 2 (官方)', 'priority': 2},
+        {'id': 'gemini-3.1-flash-image-preview', 'label': 'Gemini 3.1 Flash', 'priority': 3},
+    ]}
 
 
 @app.get('/api/health')

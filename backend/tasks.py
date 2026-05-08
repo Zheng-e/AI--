@@ -10,12 +10,18 @@ from typing import Dict, List, Optional, Tuple
 from zipfile import ZipFile
 
 from .config import (
+    API_BASE_URL,
+    API_KEYS_FILE,
     COMFY_URL,
+    DEFAULT_API_CONCURRENCY,
+    DEFAULT_API_MODEL,
     DEFAULT_COLORS_TXT,
     DEFAULT_WORKFLOW,
     OUTPUT_DIR,
     STORAGE_DIR,
 )
+from .api_client import ApiClient
+from .api_keys import MODEL_PRIORITY, KeyPool, parse_api_keys_file
 from .comfy_client import CancelledError, ComfyClient
 from .jobs import JobStore
 from .workflow import build_prompt, load_workflow, sanitize_prompt_template
@@ -76,6 +82,10 @@ class TaskRunner:
         self._task_queue: queue.Queue = queue.Queue()
         self._cancel_events: Dict[str, threading.Event] = {}
         self._cancel_lock = threading.Lock()
+        # API client
+        keys_map = parse_api_keys_file(API_KEYS_FILE)
+        key_pools = {model: KeyPool(keys) for model, keys in keys_map.items()}
+        self.api_client = ApiClient(key_pools, base_url=API_BASE_URL)
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
 
@@ -93,6 +103,8 @@ class TaskRunner:
         enable_8_step_lora: bool = False,
         target_width: int = 1601,
         target_height: int = 2086,
+        engine: str = 'comfyui',
+        api_model: str = '',
     ) -> str:
         first_image = image_paths[0]
         output_dir_name = product_id if product_id else 'pending'
@@ -114,6 +126,8 @@ class TaskRunner:
             steps_8=steps_8,
             target_width=target_width,
             target_height=target_height,
+            engine=engine,
+            api_model=api_model,
         )
         if not product_id:
             self.store.update(job.job_id, output_dir=str(self.default_output_dir / job.job_id))
@@ -124,6 +138,7 @@ class TaskRunner:
             job.job_id, product_id, garment_name, colors_text, image_paths,
             prompt_template, guidance, steps, steps_8,
             enable_lora, enable_8_step_lora, target_width, target_height,
+            engine, api_model,
         )
         self._task_queue.put((cancel_event, args))
         return job.job_id
@@ -174,6 +189,7 @@ class TaskRunner:
             job_id, job.product_id, job.garment_name, job.colors_text, image_paths,
             job.prompt_template or None, job.guidance, job.steps, job.steps_8,
             False, False, job.target_width, job.target_height,
+            job.engine or 'comfyui', job.api_model or '',
         )
         self._task_queue.put((cancel_event, args))
         return True
@@ -212,6 +228,8 @@ class TaskRunner:
         enable_8_step_lora: bool,
         target_width: int,
         target_height: int,
+        engine: str = 'comfyui',
+        api_model: str = '',
     ) -> None:
         try:
             self.store.update(job_id, status='running', message='parsing colors', progress=3, updated_at=time.time())
@@ -222,92 +240,23 @@ class TaskRunner:
             output_dir_name = product_id if product_id else job_id
             output_root = self.default_output_dir / output_dir_name
             output_root.mkdir(parents=True, exist_ok=True)
-            base_workflow = load_workflow(self.workflow_path)
 
-            total_images = max(1, len(image_paths))
-            total_colors = max(1, len(colors))
-            total_jobs = total_images * total_colors
-            done_jobs = 0
-            generated_files: List[Path] = []
+            if engine == 'api':
+                self._run_job_api(
+                    cancel_event, job_id, garment_name_from_txt, colors,
+                    image_paths, prompt_template, output_root,
+                    api_model or DEFAULT_API_MODEL,
+                )
+            else:
+                self._run_job_comfyui(
+                    cancel_event, job_id, garment_name_from_txt, colors,
+                    image_paths, prompt_template, output_root,
+                    guidance, steps, steps_8,
+                    enable_lora, enable_8_step_lora,
+                    target_width, target_height,
+                )
 
-            # resume support: load completed combos from checkpoint
-            job = self.store.get(job_id)
-            completed_set = set(tuple(c) for c in (job.completed_combos if job else []))
-
-            for image_idx, image_path in enumerate(image_paths):
-                if cancel_event.is_set():
-                    raise CancelledError()
-
-                # check if all colors for this image are already done
-                all_done_for_image = all((image_idx, ci) in completed_set for ci in range(len(colors)))
-                if all_done_for_image:
-                    done_jobs += len(colors)
-                    continue
-
-                self.store.update(job_id, message=f'uploading {image_path.name}', progress=max(8, int((done_jobs / total_jobs) * 100)), updated_at=time.time())
-                comfy_image_name = self.client.upload_image(image_path)
-
-                for color_idx, (color_name, hex_value) in enumerate(colors):
-                    if cancel_event.is_set():
-                        raise CancelledError()
-
-                    # skip already completed combo
-                    if (image_idx, color_idx) in completed_set:
-                        done_jobs += 1
-                        continue
-
-                    rgb = hex_to_rgb(hex_value)
-                    prompt = build_prompt(garment_name_from_txt, hex_value, rgb, template=prompt_template)
-                    workflow = self._prepare_workflow(
-                        base_workflow=base_workflow,
-                        image_filename=comfy_image_name,
-                        prompt=prompt,
-                        guidance=guidance,
-                        steps=steps,
-                        steps_8=steps_8,
-                        enable_lora=enable_lora,
-                        enable_8_step_lora=enable_8_step_lora,
-                        target_width=target_width,
-                        target_height=target_height,
-                        garment_name=garment_name_from_txt,
-                        job_id=job_id,
-                    )
-                    self.store.update(job_id, message=f'generating {image_path.name} / {color_name}', progress=int((done_jobs / total_jobs) * 100), updated_at=time.time())
-                    prompt_id = self.client.queue_prompt(workflow)
-                    try:
-                        history_entry = self.client.wait_for_completion(prompt_id, wait_seconds=2.0, timeout=1200.0, cancel_event=cancel_event)
-                    except CancelledError:
-                        self.client.interrupt()
-                        raise
-
-                    output_images = self.client.extract_output_images(history_entry)
-                    if output_images:
-                        for out_idx, image_info in enumerate(output_images, start=1):
-                            bytes_data = self.client.view_image(
-                                image_info['filename'],
-                                image_info.get('subfolder', ''),
-                                image_info.get('type', 'output'),
-                            )
-                            safe_color = color_name.replace(' ', '_')
-                            save_name = f'{image_path.stem}_{safe_color}_{hex_value}_{out_idx}.png'
-                            save_path = output_root / save_name
-                            save_path.write_bytes(bytes_data)
-                            generated_files.append(save_path)
-                    else:
-                        save_paths = self._fallback_collect_outputs(output_root, image_path.stem, color_name, hex_value)
-                        generated_files.extend(save_paths)
-                        if not save_paths:
-                            raise RuntimeError(f'No output images for {image_path.name} / {color_name}')
-
-                    done_jobs += 1
-                    # save checkpoint
-                    completed_set.add((image_idx, color_idx))
-                    self.store.update(job_id,
-                                      progress=int((done_jobs / total_jobs) * 100),
-                                      message=f'completed {image_path.name} / {color_name}',
-                                      completed_combos=list(completed_set),
-                                      updated_at=time.time())
-
+            generated_files = list(output_root.iterdir()) if output_root.exists() else []
             if not generated_files:
                 raise RuntimeError('No output images generated')
             self.store.update(job_id, status='completed', progress=100, message='completed', updated_at=time.time())
@@ -315,6 +264,166 @@ class TaskRunner:
             self.store.update(job_id, status='cancelled', message='cancelled', updated_at=time.time())
         except Exception as exc:
             self.store.update(job_id, status='failed', message='failed', error=str(exc), updated_at=time.time())
+
+    def _run_job_comfyui(
+        self,
+        cancel_event: threading.Event,
+        job_id: str,
+        garment_name: str,
+        colors: List[Tuple[str, str]],
+        image_paths: List[Path],
+        prompt_template: Optional[str],
+        output_root: Path,
+        guidance: float,
+        steps: int,
+        steps_8: int,
+        enable_lora: bool,
+        enable_8_step_lora: bool,
+        target_width: int,
+        target_height: int,
+    ) -> None:
+        base_workflow = load_workflow(self.workflow_path)
+        total_images = max(1, len(image_paths))
+        total_colors = max(1, len(colors))
+        total_jobs = total_images * total_colors
+        done_jobs = 0
+        generated_files: List[Path] = []
+
+        job = self.store.get(job_id)
+        completed_set = set(tuple(c) for c in (job.completed_combos if job else []))
+
+        for image_idx, image_path in enumerate(image_paths):
+            if cancel_event.is_set():
+                raise CancelledError()
+
+            all_done_for_image = all((image_idx, ci) in completed_set for ci in range(len(colors)))
+            if all_done_for_image:
+                done_jobs += len(colors)
+                continue
+
+            self.store.update(job_id, message=f'uploading {image_path.name}', progress=max(8, int((done_jobs / total_jobs) * 100)), updated_at=time.time())
+            comfy_image_name = self.client.upload_image(image_path)
+
+            for color_idx, (color_name, hex_value) in enumerate(colors):
+                if cancel_event.is_set():
+                    raise CancelledError()
+
+                if (image_idx, color_idx) in completed_set:
+                    done_jobs += 1
+                    continue
+
+                rgb = hex_to_rgb(hex_value)
+                prompt = build_prompt(garment_name, hex_value, rgb, template=prompt_template)
+                workflow = self._prepare_workflow(
+                    base_workflow=base_workflow,
+                    image_filename=comfy_image_name,
+                    prompt=prompt,
+                    guidance=guidance,
+                    steps=steps,
+                    steps_8=steps_8,
+                    enable_lora=enable_lora,
+                    enable_8_step_lora=enable_8_step_lora,
+                    target_width=target_width,
+                    target_height=target_height,
+                    garment_name=garment_name,
+                    job_id=job_id,
+                )
+                self.store.update(job_id, message=f'generating {image_path.name} / {color_name}', progress=int((done_jobs / total_jobs) * 100), updated_at=time.time())
+                prompt_id = self.client.queue_prompt(workflow)
+                try:
+                    history_entry = self.client.wait_for_completion(prompt_id, wait_seconds=2.0, timeout=1200.0, cancel_event=cancel_event)
+                except CancelledError:
+                    self.client.interrupt()
+                    raise
+
+                output_images = self.client.extract_output_images(history_entry)
+                if output_images:
+                    for out_idx, image_info in enumerate(output_images, start=1):
+                        bytes_data = self.client.view_image(
+                            image_info['filename'],
+                            image_info.get('subfolder', ''),
+                            image_info.get('type', 'output'),
+                        )
+                        safe_color = color_name.replace(' ', '_')
+                        save_name = f'{image_path.stem}_{safe_color}_{hex_value}_{out_idx}.png'
+                        save_path = output_root / save_name
+                        save_path.write_bytes(bytes_data)
+                        generated_files.append(save_path)
+                else:
+                    save_paths = self._fallback_collect_outputs(output_root, image_path.stem, color_name, hex_value)
+                    generated_files.extend(save_paths)
+                    if not save_paths:
+                        raise RuntimeError(f'No output images for {image_path.name} / {color_name}')
+
+                done_jobs += 1
+                completed_set.add((image_idx, color_idx))
+                self.store.update(job_id,
+                                  progress=int((done_jobs / total_jobs) * 100),
+                                  message=f'completed {image_path.name} / {color_name}',
+                                  completed_combos=list(completed_set),
+                                  updated_at=time.time())
+
+    def _run_job_api(
+        self,
+        cancel_event: threading.Event,
+        job_id: str,
+        garment_name: str,
+        colors: List[Tuple[str, str]],
+        image_paths: List[Path],
+        prompt_template: Optional[str],
+        output_root: Path,
+        api_model: str,
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        total_images = max(1, len(image_paths))
+        total_colors = max(1, len(colors))
+        total_jobs = total_images * total_colors
+        done_jobs = 0
+
+        job = self.store.get(job_id)
+        completed_set = set(tuple(c) for c in (job.completed_combos if job else []))
+
+        # Build list of pending combos
+        pending = []
+        for image_idx, image_path in enumerate(image_paths):
+            for color_idx, (color_name, hex_value) in enumerate(colors):
+                if (image_idx, color_idx) not in completed_set:
+                    pending.append((image_idx, image_path, color_idx, color_name, hex_value))
+
+        def _process_combo(image_idx, image_path, color_idx, color_name, hex_value):
+            if cancel_event.is_set():
+                raise CancelledError()
+            rgb = hex_to_rgb(hex_value)
+            prompt = build_prompt(garment_name, hex_value, rgb, template=prompt_template)
+            image_bytes = image_path.read_bytes()
+            result_images = self.api_client.generate(
+                image_bytes, prompt, api_model, cancel_event=cancel_event,
+            )
+            saved = []
+            for out_idx, img_bytes in enumerate(result_images, start=1):
+                safe_color = color_name.replace(' ', '_')
+                save_name = f'{image_path.stem}_{safe_color}_{hex_value}_{out_idx}.png'
+                save_path = output_root / save_name
+                save_path.write_bytes(img_bytes)
+                saved.append(save_path)
+            return image_idx, color_idx, saved
+
+        with ThreadPoolExecutor(max_workers=DEFAULT_API_CONCURRENCY) as pool:
+            futures = {
+                pool.submit(_process_combo, *combo): combo
+                for combo in pending
+            }
+            for future in as_completed(futures):
+                image_idx, color_idx, saved = future.result()
+                done_jobs += 1
+                completed_set.add((image_idx, color_idx))
+                combo = futures[future]
+                self.store.update(job_id,
+                                  progress=int((done_jobs / total_jobs) * 100),
+                                  message=f'completed {combo[1].name} / {combo[3]}',
+                                  completed_combos=list(completed_set),
+                                  updated_at=time.time())
 
     def _prepare_workflow(
         self,

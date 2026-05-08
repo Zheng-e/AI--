@@ -143,7 +143,7 @@ function jobCard(job) {
       </div>
       <span class="badge badge-${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
     </div>
-    <div class="meta">${escapeHtml(job.garment_name || '')} · ${escapeHtml(job.input_name || '')}</div>
+    <div class="meta">${escapeHtml(job.garment_name || '')} · ${escapeHtml(job.input_name || '')} ${job.engine === 'api' ? `<span class="server-tag">${escapeHtml(job.api_model || 'API')}</span>` : ''}</div>
     <div class="progress"><div style="width:${job.progress || 0}%"></div></div>
     <div class="meta">${escapeHtml(job.message || '')}</div>
     <div class="meta">进度：${job.progress || 0}% · 颜色数：${colorCount}${completedCount > 0 ? ` · 已完成：${completedCount}/${totalCombos}` : ''}</div>
@@ -330,6 +330,18 @@ async function loadDefaults() {
   document.getElementById('steps8').value = defaults.steps_8;
   document.getElementById('targetWidth').value = defaults.target_width;
   document.getElementById('targetHeight').value = defaults.target_height;
+  // load API models
+  try {
+    const modelsData = await api('/api/models');
+    const select = document.getElementById('apiModel');
+    select.innerHTML = '';
+    for (const m of modelsData.models || []) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label;
+      select.appendChild(opt);
+    }
+  } catch { /* ignore */ }
 }
 
 async function submitJob() {
@@ -363,6 +375,8 @@ async function submitJob() {
     form.append('target_height', document.getElementById('targetHeight').value);
     form.append('enable_lora', false);
     form.append('enable_8_step_lora', false);
+    form.append('engine', document.getElementById('engineSelect').value);
+    form.append('api_model', document.getElementById('apiModel').value);
     if (images.length > 0) form.append('image', images[0]);
     images.forEach(file => form.append('images', file));
     form.append('colors_text', colorsText);
@@ -395,6 +409,12 @@ document.getElementById('serverSelect').addEventListener('change', async (e) => 
   currentServerUrl = e.target.value;
   await refreshServerStatus();
   await refreshJobs();
+});
+
+document.getElementById('engineSelect').addEventListener('change', (e) => {
+  const isApi = e.target.value === 'api';
+  document.getElementById('apiModelGroup').style.display = isApi ? 'block' : 'none';
+  document.getElementById('comfyuiParams').style.display = isApi ? 'none' : '';
 });
 
 async function refreshServerStatus() {

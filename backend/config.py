@@ -18,3 +18,9 @@ DEFAULT_STEPS = int(os.environ.get('STEPS', '20'))
 DEFAULT_STEPS_8 = int(os.environ.get('STEPS_8', '8'))
 SERVER_ID = os.environ.get('SERVER_ID', socket.gethostname())
 SERVER_NAME = os.environ.get('SERVER_NAME', 'Server')
+
+# Cloud API config
+API_BASE_URL = os.environ.get('API_BASE_URL', 'https://147ai.com')
+API_KEYS_FILE = BASE_DIR / 'api.txt'
+DEFAULT_API_MODEL = 'gpt-image-2-client'
+DEFAULT_API_CONCURRENCY = int(os.environ.get('API_CONCURRENCY', '3'))

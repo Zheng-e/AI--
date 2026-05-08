@@ -34,6 +34,9 @@ class JobRecord:
     steps_8: int = 8
     target_width: int = 1601
     target_height: int = 2086
+    # engine fields
+    engine: str = 'comfyui'
+    api_model: str = ''
 
 
 class JobStore:

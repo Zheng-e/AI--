@@ -35,6 +35,18 @@
         <input id="colorsTxtFile" type="file" accept=".txt,text/plain" />
       </section>
 
+      <section class="card">
+        <h3>改色引擎</h3>
+        <select id="engineSelect">
+          <option value="comfyui">ComfyUI (本地)</option>
+          <option value="api">Cloud API (云端)</option>
+        </select>
+        <div id="apiModelGroup" style="display:none">
+          <label>API 模型</label>
+          <select id="apiModel"></select>
+        </div>
+      </section>
+
       <section class="card required-card compact-actions">
         <button id="submitBtn" type="button" class="full-width">开始改色</button>
       </section>
@@ -62,7 +74,7 @@
               <h3>商品名称</h3>
               <input id="garmentName" placeholder="例如：长款背心系列-圆领无袖背心收褶皱" />
             </div>
-            <div class="side-card">
+            <div class="side-card" id="comfyuiParams">
               <h3>生成参数</h3>
               <div class="mini-grid">
                 <div><label>Guidance</label><input id="guidance" type="number" step="0.1" value="3.5" /></div>

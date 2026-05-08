@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 @dataclass
 class JobRecord:
     job_id: str
+    product_id: str = ''
     status: str = 'created'
     progress: int = 0
     message: str = 'created'
@@ -22,6 +23,17 @@ class JobRecord:
     updated_at: float = 0.0
     error: Optional[str] = None
     cancelled: bool = False
+    # checkpoint fields
+    image_paths: List[str] = field(default_factory=list)
+    colors_text: str = ''
+    completed_combos: List[List[int]] = field(default_factory=list)
+    # resume params
+    prompt_template: str = ''
+    guidance: float = 3.5
+    steps: int = 20
+    steps_8: int = 8
+    target_width: int = 1601
+    target_height: int = 2086
 
 
 class JobStore:
@@ -34,6 +46,7 @@ class JobStore:
         record = JobRecord(job_id=job_id, **kwargs)
         with self._lock:
             self._jobs[job_id] = record
+        self._persist(record)
         return record
 
     def get(self, job_id: str) -> Optional[JobRecord]:
@@ -47,7 +60,8 @@ class JobStore:
                 return None
             for key, value in kwargs.items():
                 setattr(job, key, value)
-            return job
+        self._persist(job)
+        return job
 
     def list(self) -> List[JobRecord]:
         with self._lock:
@@ -56,3 +70,18 @@ class JobStore:
     def to_dict(self, job_id: str) -> Optional[Dict]:
         job = self.get(job_id)
         return asdict(job) if job else None
+
+    def restore_from_disk(self) -> None:
+        from .persistence import list_all_job_records, save_job_record
+        for record in list_all_job_records():
+            if record.status == 'running':
+                record.status = 'paused'
+                record.message = 'interrupted, ready to resume'
+                save_job_record(record)
+            with self._lock:
+                self._jobs[record.job_id] = record
+
+    @staticmethod
+    def _persist(record: JobRecord) -> None:
+        from .persistence import save_job_record
+        save_job_record(record)

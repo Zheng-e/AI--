@@ -1,4 +1,5 @@
 import os
+import socket
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -15,3 +16,5 @@ DEFAULT_TARGET_HEIGHT = int(os.environ.get('TARGET_HEIGHT', '2086'))
 DEFAULT_GUIDANCE = float(os.environ.get('GUIDANCE', '3.5'))
 DEFAULT_STEPS = int(os.environ.get('STEPS', '20'))
 DEFAULT_STEPS_8 = int(os.environ.get('STEPS_8', '8'))
+SERVER_ID = os.environ.get('SERVER_ID', socket.gethostname())
+SERVER_NAME = os.environ.get('SERVER_NAME', 'Server')

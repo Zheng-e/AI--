@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEFAULT_GUIDANCE, DEFAULT_STEPS, DEFAULT_STEPS_8, DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH, STORAGE_DIR
+from .config import DEFAULT_GUIDANCE, DEFAULT_STEPS, DEFAULT_STEPS_8, DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH, SERVER_ID, SERVER_NAME, STORAGE_DIR
 from .jobs import JobStore
 from .tasks import TaskRunner, parse_colors_file_bytes
 from .workflow import DEFAULT_PROMPT_TEMPLATES, sanitize_prompt_template
@@ -25,6 +25,12 @@ app.add_middleware(
 
 STORE = JobStore()
 RUNNER = TaskRunner(STORE)
+
+
+@app.on_event('startup')
+def on_startup():
+    STORE.restore_from_disk()
+
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / 'frontend'
 if STATIC_DIR.exists():
@@ -64,6 +70,7 @@ def parse_colors(colors_txt: UploadFile = File(...)) -> dict:
 @app.post('/api/jobs')
 def create_job(
     garment_name: str = Form(''),
+    product_id: str = Form(''),
     colors_text: str = Form(...),
     images: list[UploadFile] | None = File(None),
     image: UploadFile | None = File(None),
@@ -78,7 +85,8 @@ def create_job(
 ) -> dict:
     upload_root = STORAGE_DIR / 'uploads'
     upload_root.mkdir(parents=True, exist_ok=True)
-    job_image_dir = upload_root / f'job_{int(time.time())}'
+    safe_pid = re.sub(r'[^\w.\-]', '_', product_id)[:60] if product_id else f'job_{int(time.time())}'
+    job_image_dir = upload_root / safe_pid
     job_image_dir.mkdir(parents=True, exist_ok=True)
 
     incoming_images = list(images or [])
@@ -96,6 +104,7 @@ def create_job(
         saved_images.append(image_path)
 
     job_id = RUNNER.submit(
+        product_id=product_id,
         garment_name=garment_name,
         colors_text=colors_text,
         image_paths=saved_images,
@@ -135,6 +144,17 @@ def cancel_job(job_id: str) -> dict:
     return {'job_id': job_id, 'status': 'cancelling'}
 
 
+@app.post('/api/jobs/{job_id}/resume')
+def resume_job(job_id: str) -> dict:
+    job = STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='job not found')
+    ok = RUNNER.resume(job_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=f'job is {job.status}, cannot resume')
+    return {'job_id': job_id, 'status': 'queued'}
+
+
 @app.get('/api/jobs/{job_id}/download')
 def download_job(job_id: str):
     zip_path = RUNNER.zip_job_output(job_id)
@@ -143,4 +163,24 @@ def download_job(job_id: str):
 
 @app.get('/api/health')
 def health() -> dict:
-    return {'ok': True}
+    jobs = STORE.list()
+    return {
+        'ok': True,
+        'server_id': SERVER_ID,
+        'server_name': SERVER_NAME,
+        'running_jobs': sum(1 for j in jobs if j.status == 'running'),
+        'queued_jobs': sum(1 for j in jobs if j.status == 'queued'),
+        'total_jobs': len(jobs),
+    }
+
+
+@app.get('/api/server-info')
+def server_info() -> dict:
+    jobs = STORE.list()
+    return {
+        'server_id': SERVER_ID,
+        'server_name': SERVER_NAME,
+        'running_jobs': sum(1 for j in jobs if j.status == 'running'),
+        'queued_jobs': sum(1 for j in jobs if j.status == 'queued'),
+        'total_jobs': len(jobs),
+    }

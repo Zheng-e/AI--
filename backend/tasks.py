@@ -81,35 +81,47 @@ class TaskRunner:
 
     def submit(
         self,
-        garment_name: str,
-        colors_text: str,
-        image_paths: List[Path],
-        prompt_template: Optional[str],
-        guidance: float,
-        steps: int,
-        steps_8: int,
-        enable_lora: bool,
-        enable_8_step_lora: bool,
-        target_width: int,
-        target_height: int,
+        product_id: str = '',
+        garment_name: str = '',
+        colors_text: str = '',
+        image_paths: Optional[List[Path]] = None,
+        prompt_template: Optional[str] = None,
+        guidance: float = 3.5,
+        steps: int = 20,
+        steps_8: int = 8,
+        enable_lora: bool = False,
+        enable_8_step_lora: bool = False,
+        target_width: int = 1601,
+        target_height: int = 2086,
     ) -> str:
         first_image = image_paths[0]
+        output_dir_name = product_id if product_id else 'pending'
         job = self.store.create(
+            product_id=product_id,
             status='queued',
             progress=0,
             message='queued',
             garment_name=garment_name,
             input_name=first_image.name,
-            output_dir=str(self.default_output_dir / 'pending'),
+            output_dir=str(self.default_output_dir / output_dir_name),
             created_at=time.time(),
             updated_at=time.time(),
+            image_paths=[str(p) for p in image_paths],
+            colors_text=colors_text,
+            prompt_template=prompt_template or '',
+            guidance=guidance,
+            steps=steps,
+            steps_8=steps_8,
+            target_width=target_width,
+            target_height=target_height,
         )
-        self.store.update(job.job_id, output_dir=str(self.default_output_dir / job.job_id))
+        if not product_id:
+            self.store.update(job.job_id, output_dir=str(self.default_output_dir / job.job_id))
         cancel_event = threading.Event()
         with self._cancel_lock:
             self._cancel_events[job.job_id] = cancel_event
         args = (
-            job.job_id, garment_name, colors_text, image_paths,
+            job.job_id, product_id, garment_name, colors_text, image_paths,
             prompt_template, guidance, steps, steps_8,
             enable_lora, enable_8_step_lora, target_width, target_height,
         )
@@ -135,6 +147,37 @@ class TaskRunner:
             event.set()
         return True
 
+    def resume(self, job_id: str) -> bool:
+        job = self.store.get(job_id)
+        if not job:
+            return False
+        if job.status not in ('paused', 'failed', 'cancelled'):
+            return False
+        # verify upload files still exist
+        missing = [p for p in job.image_paths if not Path(p).exists()]
+        if missing:
+            self.store.update(job_id, status='failed', message=f'Upload files missing: {missing[0]}', updated_at=time.time())
+            return False
+        self.store.update(
+            job_id,
+            status='queued',
+            message='queued for resume',
+            cancelled=False,
+            error=None,
+            updated_at=time.time(),
+        )
+        cancel_event = threading.Event()
+        with self._cancel_lock:
+            self._cancel_events[job_id] = cancel_event
+        image_paths = [Path(p) for p in job.image_paths]
+        args = (
+            job_id, job.product_id, job.garment_name, job.colors_text, image_paths,
+            job.prompt_template or None, job.guidance, job.steps, job.steps_8,
+            False, False, job.target_width, job.target_height,
+        )
+        self._task_queue.put((cancel_event, args))
+        return True
+
     def _worker_loop(self) -> None:
         while True:
             try:
@@ -157,6 +200,7 @@ class TaskRunner:
         self,
         cancel_event: threading.Event,
         job_id: str,
+        product_id: str,
         garment_name: str,
         colors_text: str,
         image_paths: List[Path],
@@ -175,7 +219,8 @@ class TaskRunner:
             if garment_name:
                 garment_name_from_txt = garment_name
             prompt_template = sanitize_prompt_template(prompt_template)
-            output_root = self.default_output_dir / job_id
+            output_dir_name = product_id if product_id else job_id
+            output_root = self.default_output_dir / output_dir_name
             output_root.mkdir(parents=True, exist_ok=True)
             base_workflow = load_workflow(self.workflow_path)
 
@@ -185,16 +230,31 @@ class TaskRunner:
             done_jobs = 0
             generated_files: List[Path] = []
 
-            for image_path in image_paths:
+            # resume support: load completed combos from checkpoint
+            job = self.store.get(job_id)
+            completed_set = set(tuple(c) for c in (job.completed_combos if job else []))
+
+            for image_idx, image_path in enumerate(image_paths):
                 if cancel_event.is_set():
                     raise CancelledError()
+
+                # check if all colors for this image are already done
+                all_done_for_image = all((image_idx, ci) in completed_set for ci in range(len(colors)))
+                if all_done_for_image:
+                    done_jobs += len(colors)
+                    continue
 
                 self.store.update(job_id, message=f'uploading {image_path.name}', progress=max(8, int((done_jobs / total_jobs) * 100)), updated_at=time.time())
                 comfy_image_name = self.client.upload_image(image_path)
 
-                for color_name, hex_value in colors:
+                for color_idx, (color_name, hex_value) in enumerate(colors):
                     if cancel_event.is_set():
                         raise CancelledError()
+
+                    # skip already completed combo
+                    if (image_idx, color_idx) in completed_set:
+                        done_jobs += 1
+                        continue
 
                     rgb = hex_to_rgb(hex_value)
                     prompt = build_prompt(garment_name_from_txt, hex_value, rgb, template=prompt_template)
@@ -222,14 +282,14 @@ class TaskRunner:
 
                     output_images = self.client.extract_output_images(history_entry)
                     if output_images:
-                        for image_idx, image_info in enumerate(output_images, start=1):
+                        for out_idx, image_info in enumerate(output_images, start=1):
                             bytes_data = self.client.view_image(
                                 image_info['filename'],
                                 image_info.get('subfolder', ''),
                                 image_info.get('type', 'output'),
                             )
                             safe_color = color_name.replace(' ', '_')
-                            save_name = f'{image_path.stem}_{safe_color}_{hex_value}_{image_idx}.png'
+                            save_name = f'{image_path.stem}_{safe_color}_{hex_value}_{out_idx}.png'
                             save_path = output_root / save_name
                             save_path.write_bytes(bytes_data)
                             generated_files.append(save_path)
@@ -240,7 +300,13 @@ class TaskRunner:
                             raise RuntimeError(f'No output images for {image_path.name} / {color_name}')
 
                     done_jobs += 1
-                    self.store.update(job_id, progress=int((done_jobs / total_jobs) * 100), message=f'completed {image_path.name} / {color_name}', updated_at=time.time())
+                    # save checkpoint
+                    completed_set.add((image_idx, color_idx))
+                    self.store.update(job_id,
+                                      progress=int((done_jobs / total_jobs) * 100),
+                                      message=f'completed {image_path.name} / {color_name}',
+                                      completed_combos=list(completed_set),
+                                      updated_at=time.time())
 
             if not generated_files:
                 raise RuntimeError('No output images generated')

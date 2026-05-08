@@ -1,5 +1,22 @@
+const SERVERS = [
+  { id: '186', name: '服务器 A (186)', url: 'http://192.168.0.186:8000' },
+  { id: '34', name: '服务器 B (34)', url: 'http://192.168.0.34:8000' },
+];
+
+let currentServerUrl = '';  // empty = auto (nginx)
+
+async function fetchFromServer(baseUrl, url, options = {}) {
+  const fullUrl = baseUrl + url;
+  const resp = await fetch(fullUrl, options);
+  if (!resp.ok) {
+    throw new Error(await resp.text());
+  }
+  return resp.json();
+}
+
 async function api(url, options = {}) {
-  const resp = await fetch(url, options);
+  const baseUrl = currentServerUrl || '';
+  const resp = await fetch(baseUrl + url, options);
   if (!resp.ok) {
     throw new Error(await resp.text());
   }
@@ -94,30 +111,38 @@ function jobCard(job) {
   div.className = 'job';
   const colorCount = (job.colors || []).length;
   const canCancel = job.status === 'queued' || job.status === 'running';
+  const canResume = ['paused', 'failed', 'cancelled'].includes(job.status) && (job.completed_combos || []).length > 0;
+  const totalCombos = (job.image_paths || []).length * colorCount;
+  const completedCount = (job.completed_combos || []).length;
+  const serverLabel = job._server ? `<span class="server-tag">${escapeHtml(job._server)}</span>` : '';
   div.innerHTML = `
     <div class="job-top">
       <div>
-        <strong>${escapeHtml(job.job_id)}</strong>
+        <strong>${escapeHtml(job.product_id || job.job_id)}</strong>
+        ${serverLabel}
         <div class="meta">${escapeHtml(job.garment_name || '')} · ${escapeHtml(job.input_name || '')}</div>
       </div>
       <span class="badge badge-${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
     </div>
     <div class="progress"><div style="width:${job.progress || 0}%"></div></div>
     <div class="meta">${escapeHtml(job.message || '')}</div>
-    <div class="meta">进度：${job.progress || 0}% · 颜色数：${colorCount}</div>
-    ${canCancel ? `<button class="cancel-btn" onclick="cancelJob('${escapeHtml(job.job_id)}', this)">取消任务</button>` : ''}
-    ${job.status === 'completed' ? `<a class="link-btn" href="/api/jobs/${encodeURIComponent(job.job_id)}/download">下载结果</a>` : ''}
+    <div class="meta">进度：${job.progress || 0}% · 颜色数：${colorCount}${completedCount > 0 ? ` · 已完成：${completedCount}/${totalCombos}` : ''}</div>
+    ${canCancel ? `<button class="cancel-btn" onclick="cancelJob('${escapeHtml(job.job_id)}', '${escapeHtml(job._serverUrl || '')}', this)">取消任务</button>` : ''}
+    ${canResume ? `<button class="resume-btn" onclick="resumeJob('${escapeHtml(job.job_id)}', '${escapeHtml(job._serverUrl || '')}', this)">恢复任务</button>` : ''}
+    ${job.status === 'completed' ? `<a class="link-btn" href="${escapeHtml(job._serverUrl || '')}/api/jobs/${encodeURIComponent(job.job_id)}/download">下载结果</a>` : ''}
     ${job.status === 'failed' ? `<div class="meta error">${escapeHtml(job.error || '')}</div>` : ''}
   `;
   return div;
 }
 
-async function cancelJob(jobId, btn) {
+async function cancelJob(jobId, serverUrl, btn) {
   if (!confirm('确定要取消这个任务吗？')) return;
   btn.disabled = true;
   btn.textContent = '取消中...';
   try {
-    await api(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+    const baseUrl = serverUrl || currentServerUrl || '';
+    const resp = await fetch(`${baseUrl}/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+    if (!resp.ok) throw new Error(await resp.text());
     await refreshJobs();
   } catch (err) {
     alert(err.message || '取消失败');
@@ -126,11 +151,64 @@ async function cancelJob(jobId, btn) {
   }
 }
 
+async function resumeJob(jobId, serverUrl, btn) {
+  btn.disabled = true;
+  btn.textContent = '恢复中...';
+  try {
+    const baseUrl = serverUrl || currentServerUrl || '';
+    const resp = await fetch(`${baseUrl}/api/jobs/${encodeURIComponent(jobId)}/resume`, { method: 'POST' });
+    if (!resp.ok) throw new Error(await resp.text());
+    await refreshJobs();
+  } catch (err) {
+    alert(err.message || '恢复失败');
+    btn.disabled = false;
+    btn.textContent = '恢复任务';
+  }
+}
+
 async function refreshJobs() {
-  const data = await api('/api/jobs');
+  let allJobs = [];
+
+  if (!currentServerUrl) {
+    // Auto mode: fetch from all servers in parallel
+    const results = await Promise.allSettled(
+      SERVERS.map(s => fetchFromServer(s.url, '/api/jobs').then(data => ({
+        server: s.name,
+        serverUrl: s.url,
+        jobs: data.jobs || []
+      })))
+    );
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        for (const job of r.value.jobs) {
+          job._server = r.value.server;
+          job._serverUrl = r.value.serverUrl;
+          allJobs.push(job);
+        }
+      }
+    }
+  } else {
+    // Specific server
+    const server = SERVERS.find(s => s.url === currentServerUrl);
+    const serverName = server ? server.name : currentServerUrl;
+    try {
+      const data = await api('/api/jobs');
+      for (const job of (data.jobs || [])) {
+        job._server = serverName;
+        job._serverUrl = currentServerUrl;
+        allJobs.push(job);
+      }
+    } catch {
+      // ignore fetch errors
+    }
+  }
+
+  // Sort by created_at descending
+  allJobs.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
   const list = document.getElementById('jobsList');
   list.innerHTML = '';
-  data.jobs.slice().reverse().forEach(job => list.appendChild(jobCard(job)));
+  allJobs.forEach(job => list.appendChild(jobCard(job)));
 }
 
 async function loadDefaults() {
@@ -163,6 +241,8 @@ async function submitJob() {
       colorsText = colorsText.trimEnd() + '\n' + manualBlock;
     }
     const form = new FormData();
+    const folderName = images[0].webkitRelativePath?.split('/')[0] || '';
+    form.append('product_id', folderName);
     form.append('garment_name', document.getElementById('garmentName').value || '');
     form.append('prompt_template', document.getElementById('promptTemplate').value || '');
     form.append('guidance', document.getElementById('guidance').value);
@@ -176,7 +256,7 @@ async function submitJob() {
     images.forEach(file => form.append('images', file));
     form.append('colors_text', colorsText);
     const result = await api('/api/jobs', { method: 'POST', body: form });
-    status.textContent = `已提交任务 ${result.job_id}`;
+    status.textContent = `已提交任务 ${folderName || result.job_id}`;
     await refreshJobs();
   } catch (err) {
     status.textContent = '提交失败';
@@ -189,6 +269,46 @@ async function submitJob() {
 
 document.getElementById('submitBtn').addEventListener('click', submitJob);
 document.getElementById('refreshBtn').addEventListener('click', refreshJobs);
+
+document.getElementById('serverSelect').addEventListener('change', async (e) => {
+  currentServerUrl = e.target.value;
+  await refreshServerStatus();
+  await refreshJobs();
+});
+
+async function refreshServerStatus() {
+  const statusEl = document.getElementById('serverStatus');
+  if (!currentServerUrl) {
+    // Auto mode: show status of all servers
+    const results = await Promise.allSettled(
+      SERVERS.map(s => fetchFromServer(s.url, '/api/health').then(data => ({
+        name: s.name,
+        running: data.running_jobs || 0,
+        queued: data.queued_jobs || 0,
+        ok: data.ok
+      })))
+    );
+    const parts = [];
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.ok) {
+        parts.push(`${r.value.name}: 运行${r.value.running} 排队${r.value.queued}`);
+      } else {
+        const name = r.status === 'fulfilled' ? r.value.name : '未知';
+        parts.push(`${name}: 离线`);
+      }
+    }
+    statusEl.textContent = parts.join(' | ');
+    return;
+  }
+  try {
+    const info = await api('/api/health');
+    statusEl.textContent = `运行中: ${info.running_jobs || 0} | 排队中: ${info.queued_jobs || 0}`;
+  } catch {
+    statusEl.textContent = '无法连接';
+  }
+}
+
 loadDefaults();
+refreshServerStatus();
 refreshJobs();
 setInterval(refreshJobs, 3000);

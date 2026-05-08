@@ -51,6 +51,34 @@ button:hover, .link-btn:hover { filter: brightness(1.06); }
 }
 .cancel-btn:hover { filter: brightness(1.1); }
 .cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.resume-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #16a34a, #059669);
+  color: white;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.resume-btn:hover { filter: brightness(1.1); }
+.resume-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.badge-paused { background: rgba(251, 191, 36, 0.16); color: #fde68a; }
+.server-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.16);
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
 .progress { height: 9px; border-radius: 999px; background: rgba(148, 163, 184, 0.14); overflow: hidden; margin: 10px 0; }
 .progress > div { height: 100%; background: linear-gradient(90deg, #22c55e, #3b82f6); }
 .meta { color: #91a4bf; font-size: 12px; margin-top: 4px; }

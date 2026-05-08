@@ -17,6 +17,16 @@
         </div>
       </div>
 
+      <section class="card">
+        <h3>目标服务器</h3>
+        <select id="serverSelect">
+          <option value="">自动 (负载均衡)</option>
+          <option value="http://192.168.0.186:8000">服务器 A (186)</option>
+          <option value="http://192.168.0.34:8000">服务器 B (34)</option>
+        </select>
+        <div id="serverStatus" class="meta"></div>
+      </section>
+
       <section class="card required-card">
         <h3>必填项</h3>
         <label>商品图文件夹</label>

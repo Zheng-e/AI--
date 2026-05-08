@@ -106,8 +106,9 @@ class TaskRunner:
         engine: str = 'comfyui',
         api_model: str = '',
     ) -> str:
+        garment_name_from_txt, parsed_colors = self._parse_colors_text(colors_text)
         if not garment_name:
-            garment_name, _ = self._parse_colors_text(colors_text)
+            garment_name = garment_name_from_txt
         first_image = image_paths[0]
         output_dir_name = product_id if product_id else 'pending'
         job = self.store.create(
@@ -116,6 +117,7 @@ class TaskRunner:
             progress=0,
             message='queued',
             garment_name=garment_name,
+            colors=[{'name': n, 'hex': h} for n, h in parsed_colors],
             input_name=first_image.name,
             output_dir=str(self.default_output_dir / output_dir_name),
             created_at=time.time(),
@@ -238,7 +240,11 @@ class TaskRunner:
             garment_name_from_txt, colors = self._parse_colors_text(colors_text)
             if garment_name:
                 garment_name_from_txt = garment_name
-            self.store.update(job_id, garment_name=garment_name_from_txt)
+            self.store.update(
+                job_id,
+                garment_name=garment_name_from_txt,
+                colors=[{'name': n, 'hex': h} for n, h in colors],
+            )
             prompt_template = sanitize_prompt_template(prompt_template)
             output_dir_name = product_id if product_id else job_id
             output_root = self.default_output_dir / output_dir_name

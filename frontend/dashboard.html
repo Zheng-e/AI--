@@ -15,7 +15,8 @@
         <span>改色工作台</span>
       </div>
       <div class="nav-links">
-        <a href="/" class="nav-link">工作台</a>
+        <a href="/" class="nav-link">本地改色</a>
+        <a href="/api-recolor" class="nav-link">API 并行改色</a>
         <a href="/dashboard" class="nav-link active">看板</a>
       </div>
       <div class="nav-right">
@@ -30,7 +31,6 @@
   </nav>
 
   <main class="dashboard">
-    <!-- Stats Cards -->
     <section class="stats-cards">
       <div class="stat-card">
         <div class="stat-value" id="statProducts">0</div>
@@ -50,7 +50,7 @@
       </div>
       <div class="stat-card stat-card-purple">
         <div class="stat-value" id="statCombos">0</div>
-        <div class="stat-label">总改色组合</div>
+        <div class="stat-label">改色组合</div>
       </div>
       <div class="stat-card stat-card-cyan">
         <div class="stat-value" id="statRate">0%</div>
@@ -62,37 +62,30 @@
       </div>
     </section>
 
-    <!-- Charts Row -->
     <section class="charts-row">
       <div class="chart-card">
         <h3>任务状态分布</h3>
-        <div class="chart-container">
-          <canvas id="statusChart"></canvas>
-        </div>
+        <div class="chart-container"><canvas id="statusChart"></canvas></div>
       </div>
       <div class="chart-card">
         <h3>引擎使用分布</h3>
-        <div class="chart-container">
-          <canvas id="engineChart"></canvas>
-        </div>
+        <div class="chart-container"><canvas id="engineChart"></canvas></div>
       </div>
       <div class="chart-card">
         <h3>每日提交量（近 7 天）</h3>
-        <div class="chart-container">
-          <canvas id="dailyChart"></canvas>
-        </div>
+        <div class="chart-container"><canvas id="dailyChart"></canvas></div>
       </div>
     </section>
 
-    <!-- Jobs Table -->
     <section class="dashboard-table-section">
       <div class="table-header">
         <h2>任务明细</h2>
         <div class="table-controls">
-          <input id="tableSearch" type="text" placeholder="搜索商品名..." class="table-search" />
+          <input id="tableSearch" type="text" placeholder="搜索商品名或编号..." class="table-search" />
           <select id="tableFilter" class="table-filter">
             <option value="">全部状态</option>
             <option value="completed">已完成</option>
+            <option value="completed_with_errors">部分完成</option>
             <option value="running">运行中</option>
             <option value="queued">排队中</option>
             <option value="failed">失败</option>

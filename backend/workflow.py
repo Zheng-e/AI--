@@ -6,9 +6,9 @@ from typing import Dict, Tuple
 
 
 CATEGORY_KEYWORDS = [
-    ('bottom', ['裤', '短裤', '长裤', '牛仔裤', '半身裙', '裙']),
-    ('dress', ['裙', 'dress']),
-    ('top', ['上衣', 't恤', 'T恤', 'POLO', '背心', '吊带', '文胸', '衬衫', '卫衣', '夹克', '外套']),
+    ('dress', ['连衣裙', '连身裙', 'dress']),
+    ('bottom', ['短裤', '长裤', '牛仔裤', '半身裙', '裤裙', '裤', '裙', 'pants', 'shorts', 'skirt']),
+    ('top', ['上衣', 't恤', 'T恤', 'POLO', '背心', '紧身背心', '吊带', '文胸', '衬衫', '卫衣', '夹克', '外套', 'top', 'shirt', 'jacket']),
 ]
 
 

@@ -24,3 +24,4 @@ API_BASE_URL = os.environ.get('API_BASE_URL', 'https://147ai.com')
 API_KEYS_FILE = BASE_DIR / 'api.txt'
 DEFAULT_API_MODEL = 'gpt-image-2-client'
 DEFAULT_API_CONCURRENCY = int(os.environ.get('API_CONCURRENCY', '3'))
+DEFAULT_API_ACTIVE_JOBS = int(os.environ.get('API_ACTIVE_JOBS', '4'))

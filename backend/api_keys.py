@@ -53,3 +53,9 @@ class KeyPool:
             now = time.time()
             self._limited = {k: t for k, t in self._limited.items() if t > now}
             return any(k not in self._limited for k in self._keys)
+
+    def available_count(self) -> int:
+        with self._lock:
+            now = time.time()
+            self._limited = {k: t for k, t in self._limited.items() if t > now}
+            return sum(1 for key in self._keys if key not in self._limited)

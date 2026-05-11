@@ -1,22 +1,37 @@
 from __future__ import annotations
 
 import re
+import shutil
 import time
 from collections import Counter
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEFAULT_API_MODEL, DEFAULT_GUIDANCE, DEFAULT_STEPS, DEFAULT_STEPS_8, DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH, SERVER_ID, SERVER_NAME, STORAGE_DIR
+from .colors import ColorParseError, decode_text_bytes, parse_colors_bytes, parse_colors_text
+from .config import (
+    DEFAULT_API_ACTIVE_JOBS,
+    DEFAULT_API_CONCURRENCY,
+    DEFAULT_API_MODEL,
+    DEFAULT_GUIDANCE,
+    DEFAULT_STEPS,
+    DEFAULT_STEPS_8,
+    DEFAULT_TARGET_HEIGHT,
+    DEFAULT_TARGET_WIDTH,
+    SERVER_ID,
+    SERVER_NAME,
+    STORAGE_DIR,
+)
 from .jobs import JobStore
-from .tasks import TaskRunner, parse_colors_file_bytes
+from .tasks import TaskRunner
 from .workflow import DEFAULT_PROMPT_TEMPLATES, sanitize_prompt_template
 
-app = FastAPI(title='Flux2 Recolor Studio', version='0.3.0')
+app = FastAPI(title='Flux2 Recolor Studio', version='0.4.0')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -44,6 +59,11 @@ def index() -> str:
     return (STATIC_DIR / 'index.html').read_text(encoding='utf-8')
 
 
+@app.get('/api-recolor', response_class=HTMLResponse)
+def api_recolor() -> str:
+    return (STATIC_DIR / 'api.html').read_text(encoding='utf-8')
+
+
 @app.get('/dashboard', response_class=HTMLResponse)
 def dashboard() -> str:
     return (STATIC_DIR / 'dashboard.html').read_text(encoding='utf-8')
@@ -61,13 +81,19 @@ def defaults() -> dict:
         'enable_lora': False,
         'enable_8_step_lora': False,
         'default_prompt_templates': DEFAULT_PROMPT_TEMPLATES,
+        'default_api_model': DEFAULT_API_MODEL,
+        'max_active_jobs': DEFAULT_API_ACTIVE_JOBS,
+        'max_api_concurrency': DEFAULT_API_CONCURRENCY,
     }
 
 
 @app.post('/api/parse-colors')
 def parse_colors(colors_txt: UploadFile = File(...)) -> dict:
-    data = colors_txt.file.read()
-    garment_name, colors = parse_colors_file_bytes(data)
+    try:
+        data = colors_txt.file.read()
+        garment_name, colors = parse_colors_bytes(data, source=colors_txt.filename or '颜色文件')
+    except ColorParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         'garment_name': garment_name,
         'colors': [{'name': name, 'hex': hex_value} for name, hex_value in colors],
@@ -78,7 +104,9 @@ def parse_colors(colors_txt: UploadFile = File(...)) -> dict:
 def create_job(
     garment_name: str = Form(''),
     product_id: str = Form(''),
-    colors_text: str = Form(...),
+    colors_text: str = Form(''),
+    manual_colors_text: str = Form(''),
+    colors_txt: UploadFile | None = File(None),
     images: list[UploadFile] | None = File(None),
     image: UploadFile | None = File(None),
     prompt_template: str = Form(''),
@@ -92,66 +120,77 @@ def create_job(
     engine: str = Form('comfyui'),
     api_model: str = Form(''),
 ) -> dict:
-    upload_root = STORAGE_DIR / 'uploads'
-    upload_root.mkdir(parents=True, exist_ok=True)
-    safe_pid = re.sub(r'[^\w.\-]', '_', product_id)[:60] if product_id else f'job_{int(time.time())}'
-    job_image_dir = upload_root / safe_pid
-    job_image_dir.mkdir(parents=True, exist_ok=True)
-
     incoming_images = list(images or [])
     if image is not None and image.filename not in {img.filename for img in incoming_images}:
         incoming_images.insert(0, image)
     if not incoming_images:
-        raise HTTPException(status_code=400, detail='No image files provided')
+        raise HTTPException(status_code=400, detail='请至少上传一张商品图片')
+
+    try:
+        final_colors_text = _build_colors_text(colors_txt, colors_text, manual_colors_text)
+        parse_colors_text(final_colors_text)
+    except ColorParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    upload_root = STORAGE_DIR / 'uploads'
+    upload_root.mkdir(parents=True, exist_ok=True)
+    safe_pid = safe_name(product_id, '') or f'job_{int(time.time() * 1000)}'
+    job_image_dir = upload_root / safe_pid / str(int(time.time() * 1000))
+    job_image_dir.mkdir(parents=True, exist_ok=True)
 
     saved_images = []
-    for idx, img in enumerate(incoming_images):
-        original_name = Path(img.filename).name if img.filename else f'image_{idx + 1}.png'
-        safe_name = re.sub(r'[^\w.\-]', '_', original_name)[:200]
-        image_path = job_image_dir / safe_name
+    for index, img in enumerate(incoming_images):
+        original_name = Path(img.filename).name if img.filename else f'image_{index + 1}.png'
+        image_path = job_image_dir / safe_name(original_name, f'image_{index + 1}.png')
         image_path.write_bytes(img.file.read())
         saved_images.append(image_path)
 
-    job_id = RUNNER.submit(
-        product_id=product_id,
-        garment_name=garment_name,
-        colors_text=colors_text,
-        image_paths=saved_images,
-        prompt_template=sanitize_prompt_template(prompt_template),
-        guidance=guidance,
-        steps=steps,
-        steps_8=steps_8,
-        enable_lora=enable_lora,
-        enable_8_step_lora=enable_8_step_lora,
-        target_width=target_width,
-        target_height=target_height,
-        engine=engine,
-        api_model=api_model,
-    )
+    try:
+        job_id = RUNNER.submit(
+            product_id=product_id,
+            garment_name=garment_name,
+            colors_text=final_colors_text,
+            image_paths=saved_images,
+            prompt_template=sanitize_prompt_template(prompt_template),
+            guidance=guidance,
+            steps=steps,
+            steps_8=steps_8,
+            enable_lora=enable_lora,
+            enable_8_step_lora=enable_8_step_lora,
+            target_width=target_width,
+            target_height=target_height,
+            engine=engine,
+            api_model=api_model,
+        )
+    except (ColorParseError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {'job_id': job_id}
 
 
 @app.get('/api/jobs')
-def list_jobs() -> dict:
-    return {'jobs': [job.__dict__ for job in STORE.list()]}
+def list_jobs(engine: str = Query('', description='Optional engine filter')) -> dict:
+    jobs = [asdict(job) for job in STORE.list()]
+    if engine:
+        jobs = [job for job in jobs if (job.get('engine') or 'comfyui') == engine]
+    return {'jobs': jobs}
 
 
 @app.get('/api/jobs/{job_id}')
 def get_job(job_id: str) -> dict:
     job = STORE.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail='job not found')
-    return job.__dict__
+        raise HTTPException(status_code=404, detail='任务不存在')
+    return asdict(job)
 
 
 @app.post('/api/jobs/{job_id}/cancel')
 def cancel_job(job_id: str) -> dict:
     job = STORE.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail='job not found')
+        raise HTTPException(status_code=404, detail='任务不存在')
     ok = RUNNER.cancel(job_id)
     if not ok:
-        raise HTTPException(status_code=409, detail=f'job is {job.status}, cannot cancel')
+        raise HTTPException(status_code=409, detail=f'任务当前状态为 {job.status}，无法取消')
     return {'job_id': job_id, 'status': 'cancelling'}
 
 
@@ -159,10 +198,21 @@ def cancel_job(job_id: str) -> dict:
 def resume_job(job_id: str) -> dict:
     job = STORE.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail='job not found')
+        raise HTTPException(status_code=404, detail='任务不存在')
     ok = RUNNER.resume(job_id)
     if not ok:
-        raise HTTPException(status_code=409, detail=f'job is {job.status}, cannot resume')
+        raise HTTPException(status_code=409, detail=f'任务当前状态为 {job.status}，无法恢复')
+    return {'job_id': job_id, 'status': 'queued'}
+
+
+@app.post('/api/jobs/{job_id}/retry')
+def retry_job(job_id: str) -> dict:
+    job = STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='任务不存在')
+    ok = RUNNER.retry(job_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=f'任务当前状态为 {job.status}，无法重试')
     return {'job_id': job_id, 'status': 'queued'}
 
 
@@ -170,16 +220,11 @@ def resume_job(job_id: str) -> dict:
 def delete_job(job_id: str) -> dict:
     job = STORE.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail='job not found')
-    if job.status in ('running', 'queued'):
-        raise HTTPException(status_code=409, detail='cannot delete running/queued job, cancel it first')
-    # clean up files
+        raise HTTPException(status_code=404, detail='任务不存在')
+    if job.status in ('running', 'queued', 'cancelling'):
+        raise HTTPException(status_code=409, detail='运行中或排队中的任务请先取消')
     if job.output_dir:
-        out_dir = Path(job.output_dir)
-        if out_dir.exists():
-            import shutil
-            shutil.rmtree(out_dir, ignore_errors=True)
-    # remove from store
+        shutil.rmtree(job.output_dir, ignore_errors=True)
     STORE.delete(job_id)
     return {'job_id': job_id, 'deleted': True}
 
@@ -188,23 +233,20 @@ def delete_job(job_id: str) -> dict:
 def batch_delete_jobs(body: dict) -> dict:
     job_ids = body.get('job_ids', [])
     if not job_ids:
-        raise HTTPException(status_code=400, detail='no job_ids provided')
+        raise HTTPException(status_code=400, detail='没有提供任务 ID')
     deleted = []
     skipped = []
-    for jid in job_ids:
-        job = STORE.get(jid)
+    for job_id in job_ids:
+        job = STORE.get(job_id)
         if not job:
             continue
-        if job.status in ('running', 'queued'):
-            skipped.append(jid)
+        if job.status in ('running', 'queued', 'cancelling'):
+            skipped.append(job_id)
             continue
         if job.output_dir:
-            out_dir = Path(job.output_dir)
-            if out_dir.exists():
-                import shutil
-                shutil.rmtree(out_dir, ignore_errors=True)
-        STORE.delete(jid)
-        deleted.append(jid)
+            shutil.rmtree(job.output_dir, ignore_errors=True)
+        STORE.delete(job_id)
+        deleted.append(job_id)
     return {'deleted': deleted, 'skipped': skipped}
 
 
@@ -212,6 +254,22 @@ def batch_delete_jobs(body: dict) -> dict:
 def download_job(job_id: str):
     zip_path = RUNNER.zip_job_output(job_id)
     return FileResponse(path=str(zip_path), filename=zip_path.name, media_type='application/zip')
+
+
+@app.get('/api/jobs/{job_id}/files/{filename}')
+def get_output_file(job_id: str, filename: str):
+    job = STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='任务不存在')
+    if not job.output_dir:
+        raise HTTPException(status_code=404, detail='任务没有输出目录')
+    output_dir = Path(job.output_dir).resolve()
+    target = (output_dir / Path(filename).name).resolve()
+    if output_dir not in target.parents and target != output_dir:
+        raise HTTPException(status_code=403, detail='非法文件路径')
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail='文件不存在')
+    return FileResponse(str(target))
 
 
 @app.get('/api/models')
@@ -226,30 +284,24 @@ def list_models() -> dict:
 @app.get('/api/stats')
 def stats() -> dict:
     jobs = STORE.list()
-    by_status = dict(Counter(j.status for j in jobs))
-    by_engine = dict(Counter(j.engine or 'comfyui' for j in jobs))
-    by_model = dict(Counter(j.api_model for j in jobs if j.engine == 'api' and j.api_model))
-    products = len(set(j.product_id for j in jobs if j.product_id))
-    total_combos = 0
-    completed_combos = 0
-    for j in jobs:
-        n_colors = max(1, len(j.colors)) if j.colors else 1
-        total_combos += len(j.image_paths) * n_colors
-        completed_combos += len(j.completed_combos or [])
-    durations = []
-    for j in jobs:
-        if j.status == 'completed' and j.created_at > 0 and j.updated_at > j.created_at:
-            durations.append(j.updated_at - j.created_at)
+    by_status = dict(Counter(job.status for job in jobs))
+    by_engine = dict(Counter(job.engine or 'comfyui' for job in jobs))
+    by_model = dict(Counter(job.api_model for job in jobs if job.engine == 'api' and job.api_model))
+    products = len(set(job.product_id for job in jobs if job.product_id))
+    total_combos = sum(job.total_combos for job in jobs)
+    completed_combos = sum(job.completed_count for job in jobs)
+    failed_combos = sum(job.failed_count for job in jobs)
+    durations = [
+        job.updated_at - job.created_at
+        for job in jobs
+        if job.status == 'completed' and job.created_at > 0 and job.updated_at > job.created_at
+    ]
     avg_duration = sum(durations) / len(durations) if durations else 0
-    # daily submissions (last 7 days)
     now = datetime.now(timezone.utc)
-    daily = {}
-    for i in range(7):
-        day = (now - timedelta(days=i)).strftime('%Y-%m-%d')
-        daily[day] = 0
-    for j in jobs:
-        if j.created_at > 0:
-            day = datetime.fromtimestamp(j.created_at, tz=timezone.utc).strftime('%Y-%m-%d')
+    daily = {(now - timedelta(days=index)).strftime('%Y-%m-%d'): 0 for index in range(7)}
+    for job in jobs:
+        if job.created_at > 0:
+            day = datetime.fromtimestamp(job.created_at, tz=timezone.utc).strftime('%Y-%m-%d')
             if day in daily:
                 daily[day] += 1
     return {
@@ -260,6 +312,7 @@ def stats() -> dict:
         'products': products,
         'total_combos': total_combos,
         'completed_combos': completed_combos,
+        'failed_combos': failed_combos,
         'completion_rate': round(completed_combos / total_combos, 4) if total_combos else 0,
         'avg_duration_seconds': round(avg_duration, 1),
         'daily_submissions': daily,
@@ -273,9 +326,12 @@ def health() -> dict:
         'ok': True,
         'server_id': SERVER_ID,
         'server_name': SERVER_NAME,
-        'running_jobs': sum(1 for j in jobs if j.status == 'running'),
-        'queued_jobs': sum(1 for j in jobs if j.status == 'queued'),
+        'running_jobs': sum(1 for job in jobs if job.status == 'running'),
+        'queued_jobs': sum(1 for job in jobs if job.status == 'queued'),
         'total_jobs': len(jobs),
+        'max_active_jobs': DEFAULT_API_ACTIVE_JOBS,
+        'max_api_concurrency': DEFAULT_API_CONCURRENCY,
+        'available_keys': RUNNER.key_status(),
     }
 
 
@@ -285,7 +341,26 @@ def server_info() -> dict:
     return {
         'server_id': SERVER_ID,
         'server_name': SERVER_NAME,
-        'running_jobs': sum(1 for j in jobs if j.status == 'running'),
-        'queued_jobs': sum(1 for j in jobs if j.status == 'queued'),
+        'running_jobs': sum(1 for job in jobs if job.status == 'running'),
+        'queued_jobs': sum(1 for job in jobs if job.status == 'queued'),
         'total_jobs': len(jobs),
     }
+
+
+def _build_colors_text(colors_txt: UploadFile | None, colors_text: str, manual_colors_text: str) -> str:
+    if colors_txt is not None:
+        source = colors_txt.filename or '颜色文件'
+        text = decode_text_bytes(colors_txt.file.read(), source=source)
+    else:
+        text = colors_text or ''
+    if not text.strip():
+        raise ColorParseError('请上传颜色定义 TXT 文件')
+    manual = manual_colors_text.strip()
+    if manual:
+        text = f'{text.rstrip()}\nCOLORS\n{manual}'
+    return text
+
+
+def safe_name(value: str, fallback: str = 'item') -> str:
+    cleaned = re.sub(r'[^\w.\-#]+', '_', value.strip(), flags=re.UNICODE).strip('._')
+    return cleaned[:160] or fallback

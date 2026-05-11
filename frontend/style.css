@@ -168,6 +168,86 @@ button:hover, .link-btn:hover { filter: brightness(1.06); }
   margin-left: auto;
 }
 
+.results-preview {
+  margin-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.10);
+  padding-top: 10px;
+}
+.results-preview > summary {
+  cursor: pointer;
+  color: #bfdbfe;
+  font-weight: 700;
+  font-size: 13px;
+}
+.combo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.combo {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(2, 6, 23, 0.35);
+}
+.combo-top,
+.combo-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.combo-top {
+  justify-content: space-between;
+}
+.combo-name {
+  min-width: 0;
+  font-weight: 700;
+  font-size: 13px;
+}
+.combo-name span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  flex: 0 0 auto;
+}
+.result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.result-thumb-link {
+  display: block;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+}
+.result-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+.empty {
+  padding: 26px;
+  border: 1px dashed rgba(148, 163, 184, 0.26);
+  border-radius: 12px;
+  text-align: center;
+  color: #94a3b8;
+}
+.badge-completed_with_errors {
+  background: rgba(251, 146, 60, 0.16);
+  color: #fed7aa;
+}
+
 /* Top Navigation */
 .top-nav {
   background: rgba(7, 17, 31, 0.96);

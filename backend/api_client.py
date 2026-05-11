@@ -97,6 +97,8 @@ class ApiClient:
                     logger.warning(f'Server error {resp.status_code} on {model}, retry {attempt + 1}')
                     time.sleep(2)
                     continue
+                if resp.status_code >= 400:
+                    raise RuntimeError(f'API request failed ({resp.status_code}): {resp.text[:1000]}')
                 resp.raise_for_status()
 
                 result = resp.json()
@@ -161,6 +163,8 @@ class ApiClient:
                     logger.warning(f'Server error {resp.status_code} on {model}, retry {attempt + 1}')
                     time.sleep(2)
                     continue
+                if resp.status_code >= 400:
+                    raise RuntimeError(f'API request failed ({resp.status_code}): {resp.text[:1000]}')
                 resp.raise_for_status()
 
                 result = resp.json()

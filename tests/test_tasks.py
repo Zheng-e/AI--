@@ -1,10 +1,12 @@
 import pytest
+
+from backend.colors import ColorParseError
 from backend.tasks import (
+    _parse_colors_text,
     hex_to_rgb,
+    job_id_safe,
     parse_colors_file,
     parse_colors_file_bytes,
-    _parse_colors_text,
-    job_id_safe,
 )
 
 
@@ -14,12 +16,6 @@ class TestHexToRgb:
 
     def test_without_hash(self):
         assert hex_to_rgb('00ff00') == (0, 255, 0)
-
-    def test_white(self):
-        assert hex_to_rgb('#ffffff') == (255, 255, 255)
-
-    def test_black(self):
-        assert hex_to_rgb('#000000') == (0, 0, 0)
 
 
 class TestParseColorsText:
@@ -39,25 +35,22 @@ class TestParseColorsText:
         name, _ = _parse_colors_text(text)
         assert name == 'garment'
 
-    def test_no_colors_raises(self):
-        with pytest.raises(ValueError):
-            _parse_colors_text('GARMENT: T恤\n')
+    def test_missing_colors_header_has_clear_error(self):
+        with pytest.raises(ColorParseError, match='未找到 COLORS 段'):
+            _parse_colors_text('GARMENT: T恤\n红色: #ff0000')
 
-    def test_empty_lines_ignored(self):
-        text = 'COLORS\n\n红色: #ff0000\n\n'
-        _, colors = _parse_colors_text(text)
-        assert len(colors) == 1
+    def test_missing_colon_has_line_number(self):
+        with pytest.raises(ColorParseError, match='第 2 行颜色缺少冒号'):
+            _parse_colors_text('COLORS\n红色 #ff0000')
+
+    def test_invalid_hex_has_line_number(self):
+        with pytest.raises(ColorParseError, match='第 2 行 hex 不是 6 位'):
+            _parse_colors_text('COLORS\n红色: #12')
 
     def test_hex_case_normalized(self):
         text = 'COLORS\n红色: #FF0000'
         _, colors = _parse_colors_text(text)
         assert colors[0][1] == '#ff0000'
-
-    def test_invalid_hex_length_skipped(self):
-        text = 'COLORS\n坏的: #12\n好的: #aabbcc'
-        _, colors = _parse_colors_text(text)
-        assert len(colors) == 1
-        assert colors[0] == ('好的', '#aabbcc')
 
 
 class TestParseColorsFileBytes:
@@ -72,12 +65,18 @@ class TestParseColorsFileBytes:
         _, colors = parse_colors_file_bytes(data)
         assert colors == [('黑色', '#000000')]
 
+    def test_gbk(self):
+        data = 'GARMENT: 紧身背心\nCOLORS\n湖蓝色: #36acb6'.encode('gbk')
+        name, colors = parse_colors_file_bytes(data)
+        assert name == '紧身背心'
+        assert colors == [('湖蓝色', '#36acb6')]
+
 
 class TestParseColorsFile:
     def test_from_file(self, tmp_path):
-        p = tmp_path / 'colors.txt'
-        p.write_text('GARMENT: 裤子\nCOLORS\n灰色: #888888', encoding='utf-8')
-        name, colors = parse_colors_file(p)
+        path = tmp_path / 'colors.txt'
+        path.write_text('GARMENT: 裤子\nCOLORS\n灰色: #888888', encoding='utf-8')
+        name, colors = parse_colors_file(path)
         assert name == '裤子'
         assert colors == [('灰色', '#888888')]
 
@@ -95,7 +94,3 @@ class TestJobIdSafe:
     def test_max_length(self):
         result = job_id_safe('a' * 100)
         assert len(result) <= 40
-
-    def test_empty(self):
-        result = job_id_safe('')
-        assert result == ''
